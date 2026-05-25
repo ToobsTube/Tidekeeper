@@ -1,0 +1,22 @@
+# Node
+node_modules/
+dist/
+
+# Rust / Cargo
+target/
+src-tauri/target/
+
+# Tauri build output
+src-tauri/gen/
+
+# Environment / secrets
+.env
+.env.*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/settings.json
+.idea/
