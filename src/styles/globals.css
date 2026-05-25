@@ -234,6 +234,23 @@ html, body, #root {
   text-overflow: ellipsis;
 }
 
+.btn-launch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  background: var(--accent-dim);
+  border: 1px solid var(--accent-glow);
+  border-radius: var(--r-sm);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.1s, box-shadow 0.1s;
+}
+.btn-launch:hover { background: rgba(0,212,255,0.18); box-shadow: 0 0 10px var(--accent-glow); }
+
 .btn-nexus {
   display: flex;
   align-items: center;
@@ -461,6 +478,19 @@ html, body, #root {
 .profile-chip-export:hover { color: var(--accent); }
 .profile-chip-del:hover    { color: var(--error); }
 .profile-input { height: 26px; font-size: 12px; padding: 0 8px; width: 140px; }
+
+/* ── UE4SS banner ──────────────────────────────────────── */
+.ue4ss-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 18px;
+  background: rgba(255,180,50,0.08);
+  border-bottom: 1px solid rgba(255,180,50,0.2);
+  color: #ffb432;
+  font-size: 12px;
+  flex-shrink: 0;
+}
 
 /* ── Library list ──────────────────────────────────────── */
 .library-list {

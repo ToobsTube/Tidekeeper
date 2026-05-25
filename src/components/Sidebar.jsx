@@ -1,3 +1,4 @@
+import { invoke } from '@tauri-apps/api/core';
 import { openUrl } from '@tauri-apps/plugin-opener';
 
 const NAV = [
@@ -29,6 +30,14 @@ const NAV = [
   },
 ];
 
+async function launchGame() {
+  try {
+    await invoke('launch_game');
+  } catch (e) {
+    alert(`Could not launch game: ${e}`);
+  }
+}
+
 export default function Sidebar({ activeTab, onTabChange }) {
   return (
     <aside className="sidebar">
@@ -51,6 +60,12 @@ export default function Sidebar({ activeTab, onTabChange }) {
       </nav>
 
       <div className="sidebar-footer">
+        <button className="btn-launch" onClick={launchGame}>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
+            <polygon points="5 3 19 12 5 21 5 3"/>
+          </svg>
+          Launch Subnautica 2
+        </button>
         <div className="nexus-status">
           <div className="status-dot" />
           <span className="nexus-label">Nexus: Not signed in</span>

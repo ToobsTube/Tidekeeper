@@ -42,6 +42,7 @@ struct DownloadLink {
     uri: String,
 }
 
+
 #[derive(Default)]
 struct NxmQueue(Mutex<Vec<String>>);
 
@@ -215,11 +216,16 @@ fn analyze_zip(data: &[u8], zip_stem: &str) -> Result<ZipInfo, String> {
     let mut has_pak = false;
     let mut first_pak_stem: Option<String> = None;
     let mut embedded_mod_name: Option<String> = None;
+    let mut is_ue4ss = false;
 
     for i in 0..archive.len() {
         if let Ok(file) = archive.by_index(i) {
             let fname = file.name();
-            let fname_lower = fname.to_lowercase();
+            let fname_lower = fname.to_lowercase().replace('\\', "/");
+
+            if fname_lower == "ue4ss/ue4ss.dll" {
+                is_ue4ss = true;
+            }
 
             if fname_lower.ends_with(".pak") || fname_lower.ends_with(".ucas") || fname_lower.ends_with(".utoc") {
                 has_pak = true;
@@ -255,6 +261,14 @@ fn analyze_zip(data: &[u8], zip_stem: &str) -> Result<ZipInfo, String> {
         }
     }
 
+    if is_ue4ss {
+        return Ok(ZipInfo {
+            suggested_name: "UE4SS".into(),
+            install_type: "ue4ss".into(),
+            needs_name_prompt: false,
+        });
+    }
+
     let root_lower = first_root.as_deref().unwrap_or("").to_lowercase();
 
     if root_lower == "subnautica2" {
@@ -286,6 +300,27 @@ fn analyze_zip(data: &[u8], zip_stem: &str) -> Result<ZipInfo, String> {
             needs_name_prompt: first_root.is_none(),
         })
     }
+}
+
+// Extract all ZIP entries as-is to `base` with no component stripping.
+// Used for UE4SS which ships with files at the ZIP root (no top-level folder).
+fn extract_flat(data: Vec<u8>, base: &PathBuf) -> Result<(), String> {
+    let cursor = io::Cursor::new(data);
+    let mut archive = zip::ZipArchive::new(cursor).map_err(|e| e.to_string())?;
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i).map_err(|e| e.to_string())?;
+        let raw = PathBuf::from(file.name());
+        if raw.components().any(|c| c.as_os_str() == "..") { continue; }
+        let out = base.join(&raw);
+        if file.name().ends_with('/') {
+            fs::create_dir_all(&out).map_err(|e| e.to_string())?;
+        } else {
+            if let Some(p) = out.parent() { fs::create_dir_all(p).map_err(|e| e.to_string())?; }
+            let mut f = fs::File::create(&out).map_err(|e| e.to_string())?;
+            io::copy(&mut file, &mut f).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
 }
 
 // Strip the first path component from every ZIP entry and write to `base`.
@@ -320,6 +355,12 @@ fn install_zip_bytes(data: Vec<u8>, mods_folder: &str, zip_stem: &str, mod_name:
     let info = analyze_zip(&data, zip_stem)?;
 
     match info.install_type.as_str() {
+        "ue4ss" => {
+            let inner = derive_inner_game_folder(mods_folder)?;
+            let win64 = inner.join("Binaries").join("Win64");
+            extract_flat(data, &win64)?;
+            Ok("UE4SS".into())
+        }
         "game_relative" => {
             // ZIP mirrors the full game folder tree starting at "Subnautica2/".
             // Strip that root and extract directly into the inner game folder so
@@ -371,6 +412,34 @@ fn install_from_zip(app: AppHandle, zip_path: String, mod_name: String) -> Resul
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "mod".into());
     install_zip_bytes(data, &mods_folder, &zip_stem, mod_name.trim())
+}
+
+// ── Game launcher ────────────────────────────────────────────────────────────
+
+#[tauri::command]
+fn launch_game(app: AppHandle) -> Result<(), String> {
+    let config = load_config(&app).ok_or("No config found")?;
+    let mods_folder = config.mods_folder.ok_or("No mods folder configured")?;
+    let inner = derive_inner_game_folder(&mods_folder)?;
+    let exe = inner.join("Binaries").join("Win64").join("Subnautica2-Win64-Shipping.exe");
+    if !exe.exists() {
+        return Err(format!("Executable not found: {}", exe.display()));
+    }
+    std::process::Command::new(&exe)
+        .current_dir(exe.parent().unwrap())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// ── UE4SS management ─────────────────────────────────────────────────────────
+
+#[tauri::command]
+fn check_ue4ss(app: AppHandle) -> bool {
+    let Some(config) = load_config(&app) else { return false; };
+    let Some(mods_folder) = config.mods_folder else { return false; };
+    let Ok(inner) = derive_inner_game_folder(&mods_folder) else { return false; };
+    inner.join("Binaries").join("Win64").join("ue4ss").join("UE4SS.dll").exists()
 }
 
 // ── NXM protocol ─────────────────────────────────────────────────────────────
@@ -592,6 +661,8 @@ pub fn run() {
             uninstall_mod,
             install_from_zip,
             peek_zip_name,
+            launch_game,
+            check_ue4ss,
             handle_nxm,
             get_pending_nxm,
             switch_profile,

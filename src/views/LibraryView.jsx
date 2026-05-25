@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { open, save } from '@tauri-apps/plugin-dialog';
+import { openUrl } from '@tauri-apps/plugin-opener';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 
 export default function LibraryView({ config, onConfigChange }) {
@@ -13,6 +14,7 @@ export default function LibraryView({ config, onConfigChange }) {
   const [pendingZip, setPendingZip] = useState(null);
   const [pendingName, setPendingName] = useState('');
   const [pendingType, setPendingType] = useState('');
+  const [ue4ssOk, setUe4ssOk] = useState(true);
 
   // Profile state
   const profiles  = config?.profiles ?? {};
@@ -20,6 +22,11 @@ export default function LibraryView({ config, onConfigChange }) {
   const active    = config?.activeProfile ?? '';
   const [newName, setNewName]   = useState('');
   const [showNew, setShowNew]   = useState(false);
+
+  useEffect(() => {
+    if (!config?.modsFolder) return;
+    invoke('check_ue4ss').then(ok => setUe4ssOk(ok));
+  }, [config?.modsFolder]);
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
@@ -48,6 +55,7 @@ export default function LibraryView({ config, onConfigChange }) {
       const name = await invoke('install_from_zip', { zipPath, modName });
       setInstallMsg({ ok: true, text: `Installed: ${name}` });
       await load();
+      invoke('check_ue4ss').then(ok => setUe4ssOk(ok));
     } catch (e) {
       setInstallMsg({ ok: false, text: String(e) });
     } finally {
@@ -210,6 +218,19 @@ export default function LibraryView({ config, onConfigChange }) {
           )}
         </div>
       </div>
+
+      {!ue4ssOk && (
+        <div className="ue4ss-banner">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{flexShrink:0}}>
+            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+            <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+          </svg>
+          <span>UE4SS is not installed — script mods won't load without it. Download it, then install via "+ Install ZIP" above.</span>
+          <button className="btn-primary sm" onClick={() => openUrl('https://www.nexusmods.com/subnautica2/mods/36')} style={{marginLeft:'auto', flexShrink:0}}>
+            Download UE4SS
+          </button>
+        </div>
+      )}
 
       <div
         className={`library-list${dragging ? ' drop-target' : ''}`}
