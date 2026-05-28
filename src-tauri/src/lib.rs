@@ -18,6 +18,16 @@ pub struct Config {
     pub download_dir: Option<String>,
 }
 
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ModMeta {
+    pub source: String,          // "nexus" | "manual"
+    pub mod_id: Option<u64>,
+    pub file_id: Option<u64>,
+    pub version: Option<String>,
+    pub installed_at: u64,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModEntry {
@@ -25,6 +35,7 @@ pub struct ModEntry {
     pub enabled: bool,
     pub path: String,
     pub mod_type: String, // "script" | "pak"
+    pub meta: Option<ModMeta>,
 }
 
 // Returned by peek_zip_name so the UI knows whether to show the name prompt
@@ -62,6 +73,34 @@ struct DownloadLink {
 
 #[derive(Default)]
 struct NxmQueue(Mutex<Vec<String>>);
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn meta_path(mod_path: &Path) -> PathBuf { mod_path.join("tidekeeper.json") }
+
+fn read_meta(mod_path: &Path) -> Option<ModMeta> {
+    fs::read_to_string(meta_path(mod_path)).ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+}
+
+fn write_meta(mod_path: &Path, meta: &ModMeta) -> Result<(), String> {
+    let json = serde_json::to_string_pretty(meta).map_err(|e| e.to_string())?;
+    fs::write(meta_path(mod_path), json).map_err(|e| e.to_string())
+}
+
+fn mod_install_path(install_type: &str, mods_folder: &str, mod_name: &str) -> Option<PathBuf> {
+    match install_type {
+        "pak" => derive_inner_game_folder(mods_folder).ok()
+            .map(|inner| inner.join("Content").join("Paks").join("LogicMods").join(mod_name)),
+        "ue4ss" => None,
+        _ => Some(PathBuf::from(mods_folder).join(mod_name)),
+    }
+}
 
 fn log_path(app: &AppHandle) -> PathBuf {
     app.path()
@@ -136,6 +175,7 @@ fn scan_mods(app: AppHandle) -> Result<Vec<ModEntry>, String> {
             mods.push(ModEntry {
                 name: entry.file_name().to_string_lossy().into_owned(),
                 enabled: path.join("enabled.txt").exists(),
+                meta: read_meta(&path),
                 path: path.to_string_lossy().into_owned(),
                 mod_type: "script".into(),
             });
@@ -159,6 +199,7 @@ fn scan_mods(app: AppHandle) -> Result<Vec<ModEntry>, String> {
                 mods.push(ModEntry {
                     name,
                     enabled,
+                    meta: read_meta(&path),
                     path: path.to_string_lossy().into_owned(),
                     mod_type: "pak".into(),
                 });
@@ -533,9 +574,14 @@ fn install_from_zip(app: AppHandle, zip_path: String, mod_name: String) -> Resul
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "mod".into());
+    let install_type = analyze_zip(&data, &zip_stem).map(|i| i.install_type).unwrap_or_default();
     match install_zip_bytes(data, &mods_folder, &zip_stem, mod_name.trim()) {
         Ok(name) => {
             write_log(&app, "INFO", &format!("Installed: {}", name));
+            if let Some(mod_path) = mod_install_path(&install_type, &mods_folder, &name) {
+                let meta = ModMeta { source: "manual".into(), installed_at: now_secs(), ..Default::default() };
+                write_meta(&mod_path, &meta).ok();
+            }
             Ok(name)
         }
         Err(e) => {
@@ -616,7 +662,7 @@ async fn process_nxm(app: &AppHandle, nxm_url: String) -> Result<String, String>
         .get(&api_url)
         .header("apikey", &api_key)
         .header("Application-Name", "Tidekeeper")
-        .header("Application-Version", "0.1.0")
+        .header("Application-Version", "0.3.0")
         .send().await.map_err(|e| e.to_string())?
         .json().await.map_err(|e| format!("Failed to parse download links: {}", e))?;
 
@@ -634,16 +680,32 @@ async fn process_nxm(app: &AppHandle, nxm_url: String) -> Result<String, String>
         .send().await.map_err(|e| e.to_string())?
         .bytes().await.map_err(|e| e.to_string())?;
 
-    fs::write(download_dir.join(&filename), &bytes).map_err(|e| e.to_string())?;
+    let saved_path = download_dir.join(&filename);
+    fs::write(&saved_path, &bytes).map_err(|e| e.to_string())?;
 
     let zip_stem = PathBuf::from(&filename)
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "mod".into());
 
-    // Use auto-detected name; NXM installs don't need a user prompt
-    let info = analyze_zip(&bytes, &zip_stem)?;
-    let installed = install_zip_bytes(bytes.to_vec(), &mods_folder, &zip_stem, &info.suggested_name)?;
+    // Convert to ZIP bytes (handles .zip, .7z, .rar)
+    let zip_bytes = archive_to_zip_bytes(&saved_path.to_string_lossy())?;
+    let info = analyze_zip(&zip_bytes, &zip_stem)?;
+    let installed = install_zip_bytes(zip_bytes, &mods_folder, &zip_stem, &info.suggested_name)?;
+
+    // Write nexus source metadata
+    let mod_id_u64: Option<u64> = mod_id.parse().ok();
+    let file_id_u64: Option<u64> = file_id.parse().ok();
+    if let Some(mod_path) = mod_install_path(&info.install_type, &mods_folder, &installed) {
+        let meta = ModMeta {
+            source: "nexus".into(),
+            mod_id: mod_id_u64,
+            file_id: file_id_u64,
+            version: None,
+            installed_at: now_secs(),
+        };
+        write_meta(&mod_path, &meta).ok();
+    }
 
     let _ = app.emit("nxm-installed", &installed);
     write_log(app, "INFO", &format!("NXM installed: {}", installed));
@@ -658,6 +720,243 @@ async fn handle_nxm(app: AppHandle, nxm_url: String) -> Result<String, String> {
 #[tauri::command]
 fn get_pending_nxm(app: AppHandle) -> Option<String> {
     app.state::<NxmQueue>().0.lock().ok()?.pop()
+}
+
+// ── Nexus user info ───────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NexusUserInfo {
+    pub is_premium: bool,
+    pub username: String,
+}
+
+#[tauri::command]
+async fn validate_nexus_key(app: AppHandle) -> Result<NexusUserInfo, String> {
+    let config = load_config(&app).ok_or("No config")?;
+    let api_key = config.nexus_api_key.ok_or("No API key configured")?;
+    let client = Client::new();
+    let resp: serde_json::Value = client
+        .get("https://api.nexusmods.com/v1/users/validate.json")
+        .header("apikey", &api_key)
+        .header("Application-Name", "Tidekeeper")
+        .header("Application-Version", "0.3.0")
+        .send().await.map_err(|e| e.to_string())?
+        .json().await.map_err(|e| e.to_string())?;
+    Ok(NexusUserInfo {
+        is_premium: resp["is_premium"].as_bool().unwrap_or(false),
+        username: resp["name"].as_str().unwrap_or("").to_string(),
+    })
+}
+
+// ── Nexus mod install (Discover tab) ─────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct NexusFilesResponse {
+    files: Vec<NexusApiFile>,
+}
+
+#[derive(Deserialize)]
+struct NexusApiFile {
+    file_id: u64,
+    name: Option<String>,
+    version: Option<String>,
+    size_kb: Option<u64>,
+    category_id: Option<u32>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NexusFileEntry {
+    pub file_id: u64,
+    pub name: String,
+    pub version: Option<String>,
+    pub size_kb: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct NexusModInfo {
+    version: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModUpdateStatus {
+    pub mod_name: String,
+    pub mod_path: String,
+    pub has_update: bool,
+    pub installed_version: Option<String>,
+    pub latest_version: Option<String>,
+    pub mod_id: Option<u64>,
+}
+
+#[tauri::command]
+async fn get_nexus_mod_files(app: AppHandle, mod_id: u64) -> Result<Vec<NexusFileEntry>, String> {
+    let config = load_config(&app).ok_or("No config")?;
+    let api_key = config.nexus_api_key.ok_or("No Nexus API key configured")?;
+    let client = Client::new();
+    let url = format!("https://api.nexusmods.com/v1/games/subnautica2/mods/{}/files.json", mod_id);
+    let resp: NexusFilesResponse = client
+        .get(&url)
+        .header("apikey", &api_key)
+        .header("Application-Name", "Tidekeeper")
+        .header("Application-Version", "0.3.0")
+        .send().await.map_err(|e| e.to_string())?
+        .json().await.map_err(|e| format!("Failed to parse files: {}", e))?;
+    // Only show MAIN (1) and OPTIONAL (3) — exclude old versions and deleted
+    let entries = resp.files.into_iter()
+        .filter(|f| matches!(f.category_id, Some(1) | Some(3)))
+        .map(|f| NexusFileEntry {
+            file_id: f.file_id,
+            name: f.name.unwrap_or_else(|| format!("File {}", f.file_id)),
+            version: f.version,
+            size_kb: f.size_kb,
+        })
+        .collect();
+    Ok(entries)
+}
+
+#[tauri::command]
+async fn install_nexus_mod(app: AppHandle, mod_id: u64, file_id: u64, version: Option<String>) -> Result<String, String> {
+    let config = load_config(&app).ok_or("No config")?;
+    let api_key = config.nexus_api_key.ok_or("No Nexus API key configured")?;
+    let mods_folder = config.mods_folder.ok_or("No mods folder configured")?;
+    let download_dir = config.download_dir
+        .as_deref()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| app.path().app_data_dir().expect("app data dir").join("downloads"));
+    fs::create_dir_all(&download_dir).map_err(|e| e.to_string())?;
+
+    let client = Client::new();
+    let links_url = format!(
+        "https://api.nexusmods.com/v1/games/subnautica2/mods/{}/files/{}/download_link.json",
+        mod_id, file_id
+    );
+    let links_resp = client
+        .get(&links_url)
+        .header("apikey", &api_key)
+        .header("Application-Name", "Tidekeeper")
+        .header("Application-Version", "0.3.0")
+        .send().await.map_err(|e| e.to_string())?;
+    if !links_resp.status().is_success() {
+        let body: serde_json::Value = links_resp.json().await.unwrap_or_default();
+        let msg = body["message"].as_str().unwrap_or("unknown error");
+        return Err(format!(
+            "Nexus requires a Premium account for direct installs ({}). \
+             Use the \"Mod Manager Download\" button on the Nexus website instead.",
+            msg
+        ));
+    }
+    let links: Vec<DownloadLink> = links_resp.json().await
+        .map_err(|e| format!("Failed to parse download links: {}", e))?;
+    let uri = links.into_iter().next().ok_or("No download links returned")?.uri;
+
+    let filename = uri.split('/').last()
+        .and_then(|s| s.split('?').next())
+        .unwrap_or("mod.zip")
+        .to_string();
+    let bytes = client.get(&uri).send().await.map_err(|e| e.to_string())?
+        .bytes().await.map_err(|e| e.to_string())?;
+    let saved_path = download_dir.join(&filename);
+    fs::write(&saved_path, &bytes).map_err(|e| e.to_string())?;
+
+    let zip_stem = PathBuf::from(&filename)
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "mod".into());
+    let zip_bytes = archive_to_zip_bytes(&saved_path.to_string_lossy())?;
+    let info = analyze_zip(&zip_bytes, &zip_stem)?;
+    let installed = install_zip_bytes(zip_bytes, &mods_folder, &zip_stem, &info.suggested_name)?;
+
+    if let Some(mod_path) = mod_install_path(&info.install_type, &mods_folder, &installed) {
+        let meta = ModMeta {
+            source: "nexus".into(),
+            mod_id: Some(mod_id),
+            file_id: Some(file_id),
+            version: version.clone(),
+            installed_at: now_secs(),
+        };
+        write_meta(&mod_path, &meta).ok();
+    }
+
+    write_log(&app, "INFO", &format!("Nexus install: {} (mod {}, file {})", installed, mod_id, file_id));
+    Ok(installed)
+}
+
+#[tauri::command]
+async fn check_mod_updates(app: AppHandle) -> Vec<ModUpdateStatus> {
+    let Some(config) = load_config(&app) else { return vec![]; };
+    let Some(api_key) = config.nexus_api_key.clone() else { return vec![]; };
+    let Some(mods_folder) = config.mods_folder.clone() else { return vec![]; };
+
+    let mut nexus_mods: Vec<(String, PathBuf, ModMeta)> = Vec::new();
+
+    let script_dir = PathBuf::from(&mods_folder);
+    if script_dir.is_dir() {
+        if let Ok(entries) = fs::read_dir(&script_dir) {
+            for entry in entries.flatten() {
+                if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) { continue; }
+                let path = entry.path();
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if let Some(meta) = read_meta(&path) {
+                    if meta.source == "nexus" && meta.mod_id.is_some() {
+                        nexus_mods.push((name, path, meta));
+                    }
+                }
+            }
+        }
+    }
+    if let Ok(inner) = derive_inner_game_folder(&mods_folder) {
+        let pak_dir = inner.join("Content").join("Paks").join("LogicMods");
+        if pak_dir.is_dir() {
+            if let Ok(entries) = fs::read_dir(&pak_dir) {
+                for entry in entries.flatten() {
+                    if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) { continue; }
+                    let path = entry.path();
+                    let raw = entry.file_name().to_string_lossy().into_owned();
+                    let name = raw.trim_end_matches(".disabled").to_string();
+                    if let Some(meta) = read_meta(&path) {
+                        if meta.source == "nexus" && meta.mod_id.is_some() {
+                            nexus_mods.push((name, path, meta));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if nexus_mods.is_empty() { return vec![]; }
+
+    let client = Client::new();
+    let mut results = Vec::new();
+
+    for (name, path, meta) in nexus_mods {
+        let mod_id = meta.mod_id.unwrap();
+        let url = format!("https://api.nexusmods.com/v1/games/subnautica2/mods/{}.json", mod_id);
+        let latest_version: Option<String> = async {
+            let r = client.get(&url)
+                .header("apikey", &api_key)
+                .header("Application-Name", "Tidekeeper")
+                .header("Application-Version", "0.3.0")
+                .send().await.ok()?;
+            r.json::<NexusModInfo>().await.ok()?.version
+        }.await;
+
+        let has_update = match (&meta.version, &latest_version) {
+            (Some(installed), Some(latest)) => installed != latest,
+            _ => false,
+        };
+        results.push(ModUpdateStatus {
+            mod_name: name,
+            mod_path: path.to_string_lossy().into_owned(),
+            has_update,
+            installed_version: meta.version,
+            latest_version,
+            mod_id: Some(mod_id),
+        });
+    }
+
+    results
 }
 
 // ── Profiles ─────────────────────────────────────────────────────────────────
@@ -1353,6 +1652,26 @@ async fn install_update(app: AppHandle) -> Result<(), String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            // Second launch attempted — bring existing window to front
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+            // Forward any NXM URL passed as a CLI argument
+            for arg in &argv {
+                if arg.starts_with("nxm://") {
+                    let h = app.clone();
+                    let url = arg.clone();
+                    tauri::async_runtime::spawn(async move {
+                        if let Err(e) = process_nxm(&h, url).await {
+                            write_log(&h, "ERROR", &format!("NXM download failed: {}", e));
+                            let _ = h.emit("nxm-error", e);
+                        }
+                    });
+                }
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_deep_link::init())
@@ -1413,6 +1732,10 @@ pub fn run() {
             export_modpack,
             peek_modpack,
             install_modpack,
+            validate_nexus_key,
+            get_nexus_mod_files,
+            install_nexus_mod,
+            check_mod_updates,
             run_diagnostics,
             export_report,
             get_log,

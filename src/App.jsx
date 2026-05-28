@@ -27,17 +27,27 @@ export default function App() {
   const [tab, setTab] = useState('discover');
   const [nxmNotif, setNxmNotif] = useState(null);
   const [updateInfo, setUpdateInfo] = useState(null); // null | { available, version, notes }
+  const [isPremium, setIsPremium] = useState(false);
 
   useEffect(() => {
     invoke('get_config')
       .then(cfg => {
         setConfig(cfg);
         setReady(true);
-        // Background update check — silent on failure
         invoke('check_for_update').then(info => setUpdateInfo(info)).catch(() => {});
+        if (cfg?.nexusApiKey) {
+          invoke('validate_nexus_key').then(info => setIsPremium(info.isPremium)).catch(() => {});
+        }
       })
       .catch(() => setReady(true));
   }, []);
+
+  function handleConfigChange(cfg) {
+    setConfig(cfg);
+    if (cfg?.nexusApiKey) {
+      invoke('validate_nexus_key').then(info => setIsPremium(info.isPremium)).catch(() => {});
+    }
+  }
 
   async function recheckUpdate() {
     setUpdateInfo(null);
@@ -91,7 +101,7 @@ export default function App() {
           <>
             <Sidebar activeTab={tab} onTabChange={setTab} hasUpdate={updateInfo?.available ?? false} />
             <main className="content-area">
-              {tab === 'discover'  && <DiscoverView config={config} onTabChange={setTab} />}
+              {tab === 'discover'  && <DiscoverView config={config} onTabChange={setTab} isPremium={isPremium} />}
               {tab === 'library'   && <LibraryView config={config} onConfigChange={setConfig} />}
               {tab === 'updates'   && (
                 <div className="empty-state">
@@ -102,7 +112,7 @@ export default function App() {
                   <p>Update checking coming in a future version.</p>
                 </div>
               )}
-              {tab === 'settings'  && <SettingsView config={config} onConfigChange={setConfig} updateInfo={updateInfo} onRecheckUpdate={recheckUpdate} />}
+              {tab === 'settings'  && <SettingsView config={config} onConfigChange={handleConfigChange} updateInfo={updateInfo} onRecheckUpdate={recheckUpdate} />}
             </main>
           </>
         )}

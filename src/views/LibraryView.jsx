@@ -25,6 +25,8 @@ export default function LibraryView({ config, onConfigChange }) {
   const [ue4ssLog, setUe4ssLog]       = useState(null);
   const [packPreview, setPackPreview]   = useState(null); // { path, mods }
   const [packInstalling, setPackInstalling] = useState(false);
+  const [updateStatuses, setUpdateStatuses] = useState({}); // modPath → ModUpdateStatus
+  const [checkingUpdates, setCheckingUpdates] = useState(false);
 
   // Profile state
   const profiles  = config?.profiles ?? {};
@@ -226,6 +228,24 @@ export default function LibraryView({ config, onConfigChange }) {
     }
   }
 
+  async function checkUpdates() {
+    setCheckingUpdates(true);
+    try {
+      const statuses = await invoke('check_mod_updates');
+      const map = {};
+      for (const s of statuses) map[s.modPath] = s;
+      setUpdateStatuses(map);
+      const count = statuses.filter(s => s.hasUpdate).length;
+      setInstallMsg({ ok: true, text: count > 0 ? `${count} update${count !== 1 ? 's' : ''} available` : 'All mods up to date' });
+      setTimeout(() => setInstallMsg(null), 4000);
+    } catch (e) {
+      setInstallMsg({ ok: false, text: String(e) });
+      setTimeout(() => setInstallMsg(null), 4000);
+    } finally {
+      setCheckingUpdates(false);
+    }
+  }
+
   async function pickZip() {
     const selected = await open({ filters: [{ name: 'Mod Archive', extensions: ['zip', '7z', 'rar'] }], title: 'Select Mod Archive' });
     if (selected) await promptInstall(selected);
@@ -303,6 +323,9 @@ export default function LibraryView({ config, onConfigChange }) {
               {installMsg.text}
             </span>
           )}
+          <button className="btn-ghost sm" onClick={checkUpdates} disabled={checkingUpdates || loading}>
+            {checkingUpdates ? 'Checking…' : 'Check Updates'}
+          </button>
           <button className="btn-ghost sm" onClick={exportModPack} disabled={installing || loading}>
             Export Pack
           </button>
@@ -433,17 +456,27 @@ export default function LibraryView({ config, onConfigChange }) {
             <p>No mods installed. Click "+ Install ZIP" or drop a zip file here.</p>
           </div>
         ) : (
-          mods.map(mod => (
-            <div key={mod.path} className="mod-row">
-              <span className={`mod-row-name${mod.enabled ? '' : ' disabled'}`}>{mod.name}</span>
-              {mod.modType === 'pak' && <span className="mod-type-badge">PAK</span>}
-              <label className="toggle" title={mod.enabled ? 'Disable mod' : 'Enable mod'}>
-                <input type="checkbox" checked={mod.enabled} onChange={e => toggle(mod, e.target.checked)} />
-                <span className="toggle-track" />
-              </label>
-              <button className="btn-uninstall" onClick={() => uninstall(mod)}>Uninstall</button>
-            </div>
-          ))
+          mods.map(mod => {
+            const upd = updateStatuses[mod.path];
+            return (
+              <div key={mod.path} className="mod-row">
+                <span className={`mod-row-name${mod.enabled ? '' : ' disabled'}`}>{mod.name}</span>
+                {mod.modType === 'pak' && <span className="mod-type-badge">PAK</span>}
+                {mod.meta?.source === 'nexus' && <span className="mod-source-badge">Nexus</span>}
+                {mod.meta?.version && <span className="mod-version-badge">v{mod.meta.version}</span>}
+                {upd?.hasUpdate && (
+                  <span className="mod-update-badge" title={`Update available: v${upd.latestVersion}`}>
+                    ↑ Update
+                  </span>
+                )}
+                <label className="toggle" title={mod.enabled ? 'Disable mod' : 'Enable mod'}>
+                  <input type="checkbox" checked={mod.enabled} onChange={e => toggle(mod, e.target.checked)} />
+                  <span className="toggle-track" />
+                </label>
+                <button className="btn-uninstall" onClick={() => uninstall(mod)}>Uninstall</button>
+              </div>
+            );
+          })
         )}
       </div>
 

@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { getVersion } from '@tauri-apps/api/app';
+import { PRESETS, saveTheme } from '../utils/theme';
 
 export default function SettingsView({ config, onConfigChange, updateInfo, onRecheckUpdate }) {
   const [folder, setFolder]           = useState(config?.modsFolder ?? '');
@@ -13,8 +14,14 @@ export default function SettingsView({ config, onConfigChange, updateInfo, onRec
   const [dlMsg, setDlMsg]             = useState(null);
   const [appVersion, setAppVersion]   = useState('');
   const [installing, setInstalling]   = useState(false);
+  const [accent, setAccent]           = useState(() => localStorage.getItem('tk-accent') ?? '#00d4ff');
 
   useState(() => { getVersion().then(v => setAppVersion(v)).catch(() => {}); });
+
+  function pickTheme(color) {
+    setAccent(color);
+    saveTheme(color);
+  }
 
   async function doInstallUpdate() {
     setInstalling(true);
@@ -73,6 +80,33 @@ export default function SettingsView({ config, onConfigChange, updateInfo, onRec
   return (
     <div className="settings-scroll">
       <div className="settings-body">
+
+        {/* Theme */}
+        <section className="settings-section">
+          <h3>Theme</h3>
+          <p className="settings-hint">Pick an accent color for the interface.</p>
+          <div className="theme-swatches">
+            {PRESETS.map(p => (
+              <button
+                key={p.id}
+                className={`theme-swatch${accent === p.accent ? ' active' : ''}`}
+                style={{ '--swatch': p.accent }}
+                onClick={() => pickTheme(p.accent)}
+                title={p.label}
+              />
+            ))}
+            <label
+              className={`theme-swatch custom${!PRESETS.some(p => p.accent === accent) ? ' active' : ''}`}
+              style={{ '--swatch': accent }}
+              title="Custom color"
+            >
+              <input type="color" value={accent} onChange={e => pickTheme(e.target.value)} />
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.7)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{position:'relative',zIndex:1,pointerEvents:'none'}}>
+                <path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
+              </svg>
+            </label>
+          </div>
+        </section>
 
         {/* App Updates */}
         <section className="settings-section">

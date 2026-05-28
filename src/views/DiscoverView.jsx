@@ -27,6 +27,33 @@ function Skeletons() {
   );
 }
 
+function NonPremiumModal({ mod, onClose }) {
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()}>
+        <div className="modal-header">
+          <span className="modal-title">{mod.name}</span>
+          <button className="modal-close" onClick={onClose}>✕</button>
+        </div>
+        <p style={{fontSize:'13px', color:'var(--text2)', lineHeight:'1.6', margin:'4px 0 16px'}}>
+          Direct install requires Nexus Premium. On the files page, click{' '}
+          <strong style={{color:'var(--text)'}}>Mod Manager Download</strong> and Tidekeeper
+          will handle the rest automatically.
+        </p>
+        <div style={{display:'flex', gap:'8px', justifyContent:'flex-end'}}>
+          <button className="btn-ghost sm" onClick={onClose}>Cancel</button>
+          <button className="btn-primary sm" onClick={() => {
+            openUrl(`https://www.nexusmods.com/subnautica2/mods/${mod.modId}?tab=files`);
+            onClose();
+          }}>
+            Open Files Page
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function InstallModal({ mod, onClose, onInstalled }) {
   const [files, setFiles]     = useState(null);
   const [loading, setLoading] = useState(true);
@@ -45,7 +72,7 @@ function InstallModal({ mod, onClose, onInstalled }) {
     setInstalling(file.fileId);
     setError(null);
     try {
-      const name = await invoke('install_nexus_mod', { modId: mod.modId, fileId: file.fileId });
+      const name = await invoke('install_nexus_mod', { modId: mod.modId, fileId: file.fileId, version: file.version ?? null });
       setDone(name || file.name);
       onInstalled();
     } catch (e) {
@@ -102,7 +129,7 @@ function InstallModal({ mod, onClose, onInstalled }) {
   );
 }
 
-export default function DiscoverView({ config, onTabChange }) {
+export default function DiscoverView({ config, onTabChange, isPremium }) {
   const [source, setSource]     = useState('nexus');
   const [category, setCategory] = useState('trending');
   const [nexusMods, setNexusMods] = useState(null);
@@ -305,12 +332,16 @@ export default function DiscoverView({ config, onTabChange }) {
         )}
       </div>
 
-      {selected && (
+      {selected && isPremium && (
         <InstallModal
           mod={selected}
           onClose={() => setSelected(null)}
           onInstalled={() => {}}
         />
+      )}
+
+      {selected && !isPremium && (
+        <NonPremiumModal mod={selected} onClose={() => setSelected(null)} />
       )}
     </>
   );
