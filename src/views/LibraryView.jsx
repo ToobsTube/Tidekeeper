@@ -14,7 +14,17 @@ export default function LibraryView({ config, onConfigChange }) {
   const [pendingZip, setPendingZip] = useState(null);
   const [pendingName, setPendingName] = useState('');
   const [pendingType, setPendingType] = useState('');
-  const [ue4ssOk, setUe4ssOk] = useState(true);
+  const [ue4ssOk, setUe4ssOk]       = useState(true);
+  const [unmanaged, setUnmanaged]   = useState([]);
+  const [dismissed, setDismissed]   = useState(new Set());
+  const [adoptNames, setAdoptNames] = useState({});
+  const [diagRunning, setDiagRunning] = useState(false);
+  const [diagResults, setDiagResults] = useState(null);
+  const [diagTab, setDiagTab]         = useState('check');
+  const [logLines, setLogLines]       = useState(null);
+  const [ue4ssLog, setUe4ssLog]       = useState(null);
+  const [packPreview, setPackPreview]   = useState(null); // { path, mods }
+  const [packInstalling, setPackInstalling] = useState(false);
 
   // Profile state
   const profiles  = config?.profiles ?? {};
@@ -30,7 +40,15 @@ export default function LibraryView({ config, onConfigChange }) {
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
-    try { setMods(await invoke('scan_mods')); }
+    try {
+      const [modList, unmanagedList] = await Promise.all([
+        invoke('scan_mods'),
+        invoke('get_unmanaged_paks'),
+      ]);
+      setMods(modList);
+      setUnmanaged(unmanagedList);
+      setAdoptNames(Object.fromEntries(unmanagedList.map(g => [g.suggestedName, g.suggestedName])));
+    }
     catch (err) { setError(String(err)); }
     finally { setLoading(false); }
   }, []);
@@ -43,7 +61,7 @@ export default function LibraryView({ config, onConfigChange }) {
     let unlisten;
     win.listen('tauri://file-drop', async e => {
       const paths = e.payload?.paths ?? e.payload ?? [];
-      const zip = paths.find(p => p.toLowerCase().endsWith('.zip'));
+      const zip = paths.find(p => /\.(zip|7z|rar)$/i.test(p));
       if (zip) await promptInstall(zip);
     }).then(fn => { unlisten = fn; });
     return () => { if (unlisten) unlisten(); };
@@ -91,8 +109,125 @@ export default function LibraryView({ config, onConfigChange }) {
     await doInstall(zipPath, modName);
   }
 
+  const fmtTs = ts => {
+    const d = new Date(ts * 1000);
+    const p = n => String(n).padStart(2, '0');
+    return `${d.getMonth()+1}/${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  };
+
+  async function runDiagnostics() {
+    setDiagRunning(true);
+    setDiagResults(null);
+    setDiagTab('check');
+    setLogLines(null);
+    setUe4ssLog(null);
+    try {
+      const [results, log] = await Promise.all([invoke('run_diagnostics'), invoke('get_log')]);
+      setDiagResults(results);
+      setLogLines(log);
+    } catch (e) {
+      setDiagResults([{ severity: 'error', title: 'Diagnostics failed', detail: String(e) }]);
+    } finally {
+      setDiagRunning(false);
+    }
+  }
+
+  async function loadUe4ssLog() {
+    setUe4ssLog({ loading: true });
+    try {
+      const text = await invoke('get_ue4ss_log');
+      setUe4ssLog({ text });
+    } catch (e) {
+      setUe4ssLog({ error: String(e) });
+    }
+  }
+
+  function switchDiagTab(tab) {
+    setDiagTab(tab);
+    if (tab === 'ue4ss' && ue4ssLog === null) loadUe4ssLog();
+  }
+
+  async function exportReport() {
+    const path = await save({
+      defaultPath: 'tidekeeper-report.txt',
+      filters: [{ name: 'Text File', extensions: ['txt'] }],
+      title: 'Save Diagnostic Report',
+    });
+    if (!path) return;
+    try {
+      await invoke('export_report', {
+        exportPath: path,
+        generatedAt: new Date().toLocaleString(),
+      });
+    } catch (e) { alert(`Export failed: ${e}`); }
+  }
+
+  async function clearLog() {
+    try {
+      await invoke('clear_log');
+      setLogLines([]);
+    } catch (e) { alert(`Clear log failed: ${e}`); }
+  }
+
+  async function adoptMod(group) {
+    const modName = (adoptNames[group.suggestedName] || group.suggestedName).trim();
+    if (!modName) return;
+    try {
+      await invoke('adopt_unmanaged_pak', { suggestedName: group.suggestedName, modName });
+      await load();
+    } catch (e) { alert(`Failed to adopt mod: ${e}`); }
+  }
+
+  function dismissMod(stem) {
+    setDismissed(prev => new Set([...prev, stem]));
+  }
+
+  async function exportModPack() {
+    if (!mods || mods.length === 0) { alert('No mods installed to export.'); return; }
+    const path = await save({
+      defaultPath: 'tidekeeper-modpack.tkpack',
+      filters: [{ name: 'Tidekeeper Mod Pack', extensions: ['tkpack'] }],
+      title: 'Save Mod Pack',
+    });
+    if (!path) return;
+    try {
+      const count = await invoke('export_modpack', { exportPath: path });
+      setInstallMsg({ ok: true, text: `Exported ${count} mod${count !== 1 ? 's' : ''}` });
+      setTimeout(() => setInstallMsg(null), 4000);
+    } catch (e) { alert(`Export failed: ${e}`); }
+  }
+
+  async function importModPack() {
+    const path = await open({
+      filters: [{ name: 'Tidekeeper Mod Pack', extensions: ['tkpack'] }],
+      title: 'Open Mod Pack',
+    });
+    if (!path) return;
+    try {
+      const mods = await invoke('peek_modpack', { archivePath: path });
+      setPackPreview({ path, mods });
+    } catch (e) { alert(`Could not read mod pack: ${e}`); }
+  }
+
+  async function installModPack() {
+    if (!packPreview) return;
+    setPackInstalling(true);
+    try {
+      const count = await invoke('install_modpack', { archivePath: packPreview.path });
+      setPackPreview(null);
+      setInstallMsg({ ok: true, text: `Installed ${count} mod${count !== 1 ? 's' : ''} from pack` });
+      await load();
+      invoke('check_ue4ss').then(ok => setUe4ssOk(ok));
+      setTimeout(() => setInstallMsg(null), 4000);
+    } catch (e) {
+      alert(`Install failed: ${e}`);
+    } finally {
+      setPackInstalling(false);
+    }
+  }
+
   async function pickZip() {
-    const selected = await open({ filters: [{ name: 'Zip Archive', extensions: ['zip'] }], title: 'Select Mod ZIP' });
+    const selected = await open({ filters: [{ name: 'Mod Archive', extensions: ['zip', '7z', 'rar'] }], title: 'Select Mod Archive' });
     if (selected) await promptInstall(selected);
   }
 
@@ -168,8 +303,17 @@ export default function LibraryView({ config, onConfigChange }) {
               {installMsg.text}
             </span>
           )}
+          <button className="btn-ghost sm" onClick={exportModPack} disabled={installing || loading}>
+            Export Pack
+          </button>
+          <button className="btn-ghost sm" onClick={importModPack} disabled={installing}>
+            Import Pack
+          </button>
           <button className="btn-ghost sm" onClick={pickZip} disabled={installing}>
             {installing ? 'Installing…' : '+ Install ZIP'}
+          </button>
+          <button className="btn-ghost sm" onClick={runDiagnostics} disabled={diagRunning || loading}>
+            {diagRunning ? 'Scanning…' : 'Diagnostics'}
           </button>
           <button className="btn-ghost sm" onClick={load} disabled={loading}>
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
@@ -232,6 +376,37 @@ export default function LibraryView({ config, onConfigChange }) {
         </div>
       )}
 
+      {unmanaged.filter(g => !dismissed.has(g.suggestedName)).length > 0 && (
+        <div className="unmanaged-section">
+          <div className="unmanaged-header">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{flexShrink:0}}>
+              <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+            </svg>
+            <span>Unmanaged mod files found in LogicMods — Tidekeeper can't track or disable these until you take over.</span>
+          </div>
+          {unmanaged.filter(g => !dismissed.has(g.suggestedName)).map(group => (
+            <div key={group.suggestedName} className="unmanaged-row">
+              <div className="unmanaged-files">
+                {group.files.map(f => <span key={f} className="unmanaged-file">{f}</span>)}
+              </div>
+              <input
+                className="input"
+                style={{width:'160px', flexShrink:0}}
+                value={adoptNames[group.suggestedName] ?? group.suggestedName}
+                onChange={e => setAdoptNames(prev => ({...prev, [group.suggestedName]: e.target.value}))}
+                onKeyDown={e => { if (e.key === 'Enter') adoptMod(group); }}
+                placeholder="Mod name…"
+              />
+              <button className="btn-primary sm" onClick={() => adoptMod(group)}
+                disabled={!(adoptNames[group.suggestedName] ?? group.suggestedName).trim()}>
+                Take Over
+              </button>
+              <button className="btn-ghost sm" onClick={() => dismissMod(group.suggestedName)}>Leave It</button>
+            </div>
+          ))}
+        </div>
+      )}
+
       <div
         className={`library-list${dragging ? ' drop-target' : ''}`}
         onDragOver={e => { e.preventDefault(); setDragging(true); }}
@@ -244,7 +419,7 @@ export default function LibraryView({ config, onConfigChange }) {
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
               <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
             </svg>
-            <p>Drop ZIP to install</p>
+            <p>Drop archive to install</p>
           </div>
         ) : loading ? (
           <div className="empty-state"><p style={{color:'var(--text3)'}}>Scanning mods folder…</p></div>
@@ -271,6 +446,121 @@ export default function LibraryView({ config, onConfigChange }) {
           ))
         )}
       </div>
+
+      {diagResults && (
+        <div className="modal-backdrop" onClick={() => setDiagResults(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <span className="modal-title">Diagnostics</span>
+              <div className="source-toggle" style={{margin:'0 auto 0 14px'}}>
+                <button className={`source-btn sm${diagTab === 'check' ? ' active' : ''}`} onClick={() => switchDiagTab('check')}>Checks</button>
+                <button className={`source-btn sm${diagTab === 'log' ? ' active' : ''}`} onClick={() => switchDiagTab('log')}>Log</button>
+                <button className={`source-btn sm${diagTab === 'ue4ss' ? ' active' : ''}`} onClick={() => switchDiagTab('ue4ss')}>UE4SS Log</button>
+              </div>
+              <button className="modal-close" onClick={() => setDiagResults(null)}>✕</button>
+            </div>
+
+            {diagTab === 'check' ? (
+              <div className="diag-list">
+                {diagResults.map((issue, i) => (
+                  <div key={i} className={`diag-issue diag-${issue.severity}`}>
+                    <span className="diag-dot" />
+                    <div className="diag-body">
+                      <span className="diag-title">{issue.title}</span>
+                      <span className="diag-detail">{issue.detail}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : diagTab === 'log' ? (
+              <div className="log-list">
+                {!logLines || logLines.length === 0 ? (
+                  <p style={{color:'var(--text3)', fontSize:'12px', padding:'16px 0', textAlign:'center'}}>
+                    {logLines === null ? 'Loading…' : 'Log is empty.'}
+                  </p>
+                ) : logLines.map((line, i) => (
+                  <div key={i} className="log-entry">
+                    <span className="log-ts">{fmtTs(line.ts)}</span>
+                    <span className={`log-level log-level-${line.level.toLowerCase()}`}>{line.level}</span>
+                    <span className="log-msg">{line.message}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="ue4ss-log-wrap">
+                {!ue4ssLog || ue4ssLog.loading ? (
+                  <p style={{color:'var(--text3)', fontSize:'12px', padding:'16px 0', textAlign:'center'}}>
+                    {ue4ssLog?.loading ? 'Loading…' : 'Select this tab to load.'}
+                  </p>
+                ) : ue4ssLog.error ? (
+                  <p style={{color:'var(--error)', fontSize:'12px', padding:'12px 0'}}>{ue4ssLog.error}</p>
+                ) : (
+                  <pre className="ue4ss-log-content">
+                    {ue4ssLog.text.split('\n').map((line, i) => {
+                      const lower = line.toLowerCase();
+                      const cls = lower.includes('error') ? 'ue4ss-line-error'
+                                : lower.includes('warn')  ? 'ue4ss-line-warn'
+                                : '';
+                      return <span key={i} className={cls}>{line}{'\n'}</span>;
+                    })}
+                  </pre>
+                )}
+              </div>
+            )}
+
+            <div style={{display:'flex', justifyContent:'space-between', marginTop:'8px'}}>
+              <div style={{display:'flex', gap:'6px'}}>
+                {diagTab === 'log' && <button className="btn-ghost sm" onClick={clearLog}>Clear Log</button>}
+                {diagTab === 'ue4ss' && <button className="btn-ghost sm" onClick={loadUe4ssLog}>Refresh</button>}
+                <button className="btn-primary sm" onClick={exportReport}>Export Report</button>
+              </div>
+              <button className="btn-ghost sm" onClick={() => setDiagResults(null)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {packPreview && (
+        <div className="modal-backdrop" onClick={() => { if (!packInstalling) setPackPreview(null); }}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <span className="modal-title">Install Mod Pack</span>
+              <button className="modal-close" onClick={() => setPackPreview(null)} disabled={packInstalling}>✕</button>
+            </div>
+            <p style={{fontSize:'13px', color:'var(--text2)', margin:'0 0 10px'}}>
+              {packPreview.mods.length} mod{packPreview.mods.length !== 1 ? 's' : ''} — existing mods with the same name will be overwritten.
+            </p>
+            {(() => {
+              const installed = new Set((mods || []).map(m => m.name.toLowerCase()));
+              const conflicts = packPreview.mods.filter(m => installed.has(m.name.toLowerCase())).length;
+              return conflicts > 0 && (
+                <p style={{fontSize:'12px', color:'var(--error)', margin:'0 0 8px'}}>
+                  {conflicts} mod{conflicts !== 1 ? 's' : ''} already installed — {conflicts !== 1 ? 'those' : 'that'} will be overwritten.
+                </p>
+              );
+            })()}
+            <div className="pack-mod-list">
+              {(() => {
+                const installed = new Set((mods || []).map(m => m.name.toLowerCase()));
+                return packPreview.mods.map((m, i) => (
+                  <div key={i} className="pack-mod-row">
+                    <span className="pack-mod-name">{m.name}</span>
+                    {m.modType === 'pak' && <span className="mod-type-badge">PAK</span>}
+                    {installed.has(m.name.toLowerCase()) && <span className="pack-conflict-badge">Installed</span>}
+                    <span className="pack-mod-state">{m.enabled ? 'Enabled' : 'Disabled'}</span>
+                  </div>
+                ));
+              })()}
+            </div>
+            <div style={{display:'flex', gap:'8px', marginTop:'12px', justifyContent:'flex-end'}}>
+              <button className="btn-ghost sm" onClick={() => setPackPreview(null)} disabled={packInstalling}>Cancel</button>
+              <button className="btn-primary sm" onClick={installModPack} disabled={packInstalling}>
+                {packInstalling ? 'Installing…' : 'Install All'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {pendingZip && (
         <div className="modal-backdrop" onClick={() => setPendingZip(null)}>

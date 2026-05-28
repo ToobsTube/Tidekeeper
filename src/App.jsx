@@ -26,12 +26,24 @@ export default function App() {
   const [ready, setReady] = useState(false);
   const [tab, setTab] = useState('discover');
   const [nxmNotif, setNxmNotif] = useState(null);
+  const [updateInfo, setUpdateInfo] = useState(null); // null | { available, version, notes }
 
   useEffect(() => {
     invoke('get_config')
-      .then(cfg => { setConfig(cfg); setReady(true); })
+      .then(cfg => {
+        setConfig(cfg);
+        setReady(true);
+        // Background update check — silent on failure
+        invoke('check_for_update').then(info => setUpdateInfo(info)).catch(() => {});
+      })
       .catch(() => setReady(true));
   }, []);
+
+  async function recheckUpdate() {
+    setUpdateInfo(null);
+    const info = await invoke('check_for_update').catch(() => null);
+    setUpdateInfo(info);
+  }
 
   // Listen for NXM download events from Rust
   useEffect(() => {
@@ -77,7 +89,7 @@ export default function App() {
           <SetupView onComplete={cfg => { setConfig(cfg); setTab('library'); }} />
         ) : (
           <>
-            <Sidebar activeTab={tab} onTabChange={setTab} />
+            <Sidebar activeTab={tab} onTabChange={setTab} hasUpdate={updateInfo?.available ?? false} />
             <main className="content-area">
               {tab === 'discover'  && <DiscoverView config={config} onTabChange={setTab} />}
               {tab === 'library'   && <LibraryView config={config} onConfigChange={setConfig} />}
@@ -90,7 +102,7 @@ export default function App() {
                   <p>Update checking coming in a future version.</p>
                 </div>
               )}
-              {tab === 'settings'  && <SettingsView config={config} onConfigChange={setConfig} />}
+              {tab === 'settings'  && <SettingsView config={config} onConfigChange={setConfig} updateInfo={updateInfo} onRecheckUpdate={recheckUpdate} />}
             </main>
           </>
         )}

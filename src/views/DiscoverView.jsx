@@ -1,4 +1,4 @@
-import { useState, useEffect, useDeferredValue } from 'react';
+import { useState, useEffect, useRef, useDeferredValue } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { openUrl } from '@tauri-apps/plugin-opener';
 // invoke is used by InstallModal for install_nexus_mod (future)
@@ -117,9 +117,13 @@ export default function DiscoverView({ config, onTabChange }) {
   const [offset, setOffset]       = useState(0);
   const [total, setTotal]         = useState(null);
   const [loadingMore, setLoadingMore] = useState(false);
-  const PAGE = 20;
+  const sentinelRef = useRef(null);
+  const PAGE = 40;
 
-  const sortField = category === 'latest' ? 'createdAt' : category === 'updated' ? 'updatedAt' : 'endorsements';
+  const sortField  = category === 'latest'  ? 'createdAt'
+                   : category === 'updated' ? 'updatedAt'
+                   : 'endorsements';
+  const sortDir = 'DESC';
 
   const fetchMods = async (off, replace) => {
     if (replace) { setLoading(true); setError(null); setNexusMods(null); }
@@ -128,6 +132,7 @@ export default function DiscoverView({ config, onTabChange }) {
     const query = `query {
       mods(
         filter: { gameDomainName: { value: "subnautica2" } }
+        sort: [{ ${sortField}: { direction: ${sortDir} } }]
         count: ${PAGE}
         offset: ${off}
       ) {
@@ -185,6 +190,17 @@ export default function DiscoverView({ config, onTabChange }) {
     setTotal(null);
     fetchMods(0, true);
   }, [source, category, hasApiKey]);
+
+  // Infinite scroll: load next page when sentinel scrolls into view
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el || loadingMore || loading || !nexusMods || total === null || nexusMods.length >= total || deferred) return;
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting) fetchMods(offset, false);
+    }, { threshold: 0 });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [offset, total, nexusMods?.length, loadingMore, loading, !!deferred]);
 
   const visible = nexusMods
     ? nexusMods.filter(m => {
@@ -282,13 +298,9 @@ export default function DiscoverView({ config, onTabChange }) {
               </div>
             ))}
           </div>
-        {total !== null && nexusMods && nexusMods.length < total && !deferred && (
-          <div style={{textAlign:'center', padding:'16px'}}>
-            <button className="btn-ghost sm" onClick={() => fetchMods(offset, false)} disabled={loadingMore}>
-              {loadingMore ? 'Loading…' : `Load more (${nexusMods.length} of ${total})`}
-            </button>
-          </div>
-        )}
+        <div ref={sentinelRef} style={{height:'48px', display:'flex', alignItems:'center', justifyContent:'center'}}>
+          {loadingMore && <span style={{fontSize:'12px', color:'var(--text3)'}}>Loading more…</span>}
+        </div>
         </>
         )}
       </div>

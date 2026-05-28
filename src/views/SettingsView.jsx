@@ -2,14 +2,29 @@ import { useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { openUrl } from '@tauri-apps/plugin-opener';
+import { getVersion } from '@tauri-apps/api/app';
 
-export default function SettingsView({ config, onConfigChange }) {
+export default function SettingsView({ config, onConfigChange, updateInfo, onRecheckUpdate }) {
   const [folder, setFolder]           = useState(config?.modsFolder ?? '');
   const [apiKey, setApiKey]           = useState(config?.nexusApiKey ?? '');
   const [downloadDir, setDownloadDir] = useState(config?.downloadDir ?? '');
   const [folderMsg, setFolderMsg]     = useState(null);
   const [keyMsg, setKeyMsg]           = useState(null);
   const [dlMsg, setDlMsg]             = useState(null);
+  const [appVersion, setAppVersion]   = useState('');
+  const [installing, setInstalling]   = useState(false);
+
+  useState(() => { getVersion().then(v => setAppVersion(v)).catch(() => {}); });
+
+  async function doInstallUpdate() {
+    setInstalling(true);
+    try {
+      await invoke('install_update');
+    } catch (e) {
+      alert(`Update failed: ${e}`);
+      setInstalling(false);
+    }
+  }
 
   async function browseFolder() {
     const selected = await open({ directory: true, title: 'Select UE4SS Mods Folder' });
@@ -58,6 +73,42 @@ export default function SettingsView({ config, onConfigChange }) {
   return (
     <div className="settings-scroll">
       <div className="settings-body">
+
+        {/* App Updates */}
+        <section className="settings-section">
+          <h3>App Updates</h3>
+          <div style={{display:'flex', alignItems:'center', gap:'10px', flexWrap:'wrap'}}>
+            <span style={{fontSize:'12px', color:'var(--text2)'}}>
+              Current version: <strong style={{color:'var(--text)'}}>{appVersion || '…'}</strong>
+            </span>
+            {updateInfo === null ? (
+              <span style={{fontSize:'12px', color:'var(--text3)'}}>Checking…</span>
+            ) : updateInfo.available ? (
+              <span style={{fontSize:'12px', color:'var(--success)', fontWeight:600}}>
+                Update available: v{updateInfo.version}
+              </span>
+            ) : (
+              <span style={{fontSize:'12px', color:'var(--text3)'}}>Up to date</span>
+            )}
+            {!updateInfo?.available && (
+              <button className="btn-ghost sm" onClick={onRecheckUpdate} disabled={updateInfo === null}>
+                Check for updates
+              </button>
+            )}
+          </div>
+          {updateInfo?.available && (
+            <>
+              {updateInfo.notes && (
+                <p className="settings-hint" style={{marginTop:'8px', whiteSpace:'pre-wrap'}}>{updateInfo.notes}</p>
+              )}
+              <div className="settings-row" style={{marginTop:'10px'}}>
+                <button className="btn-primary sm" onClick={doInstallUpdate} disabled={installing}>
+                  {installing ? 'Downloading & installing…' : `Update to v${updateInfo.version} and restart`}
+                </button>
+              </div>
+            </>
+          )}
+        </section>
 
         {/* Mods Folder */}
         <section className="settings-section">

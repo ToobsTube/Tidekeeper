@@ -1,6 +1,7 @@
 use reqwest::Client;
+use tauri_plugin_updater::UpdaterExt;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, fs, io, path::PathBuf, sync::Mutex};
+use std::{collections::HashMap, fs, io, path::{Path, PathBuf}, sync::Mutex};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_deep_link::DeepLinkExt;
 
@@ -36,6 +37,22 @@ pub struct ZipInfo {
     pub needs_name_prompt: bool,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagIssue {
+    pub severity: String, // "error" | "warning" | "ok"
+    pub title: String,
+    pub detail: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogLine {
+    pub ts: u64,
+    pub level: String, // "INFO" | "WARN" | "ERROR"
+    pub message: String,
+}
+
 #[derive(Deserialize)]
 struct DownloadLink {
     #[serde(rename = "URI")]
@@ -45,6 +62,25 @@ struct DownloadLink {
 
 #[derive(Default)]
 struct NxmQueue(Mutex<Vec<String>>);
+
+fn log_path(app: &AppHandle) -> PathBuf {
+    app.path()
+        .app_data_dir()
+        .expect("failed to resolve app data dir")
+        .join("tidekeeper.log")
+}
+
+fn write_log(app: &AppHandle, level: &str, message: &str) {
+    use std::io::Write;
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let line = format!("{}|{}|{}\n", ts, level, message);
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(log_path(app)) {
+        let _ = f.write_all(line.as_bytes());
+    }
+}
 
 fn config_path(app: &AppHandle) -> PathBuf {
     app.path()
@@ -135,7 +171,7 @@ fn scan_mods(app: AppHandle) -> Result<Vec<ModEntry>, String> {
 }
 
 #[tauri::command]
-fn toggle_mod(mod_path: String, enabled: bool) -> Result<String, String> {
+fn toggle_mod(app: AppHandle, mod_path: String, enabled: bool) -> Result<String, String> {
     let path = PathBuf::from(&mod_path);
     let parent = path.parent().ok_or("Invalid mod path")?;
     let name = path.file_name().ok_or("Invalid mod path")?.to_string_lossy().into_owned();
@@ -146,7 +182,7 @@ fn toggle_mod(mod_path: String, enabled: bool) -> Result<String, String> {
         .unwrap_or(false)
         || name.ends_with(".disabled");
 
-    if is_pak {
+    let result = if is_pak {
         let base_name = name.trim_end_matches(".disabled");
         let enabled_path  = parent.join(base_name);
         let disabled_path = parent.join(format!("{}.disabled", base_name));
@@ -162,7 +198,11 @@ fn toggle_mod(mod_path: String, enabled: bool) -> Result<String, String> {
             fs::remove_file(&enabled_file).map_err(|e| e.to_string())?;
         }
         Ok(mod_path)
-    }
+    };
+
+    let display = name.trim_end_matches(".disabled");
+    write_log(&app, "INFO", &format!("{}: {}", if enabled { "Enabled" } else { "Disabled" }, display));
+    result
 }
 
 #[tauri::command]
@@ -173,6 +213,7 @@ fn uninstall_mod(app: AppHandle, mod_path: String) -> Result<(), String> {
         .unwrap_or_default();
 
     fs::remove_dir_all(&mod_path).map_err(|e| e.to_string())?;
+    write_log(&app, "INFO", &format!("Uninstalled: {}", mod_name));
 
     // Remove from all profiles so no profile points to a deleted mod
     if let Some(mut config) = load_config(&app) {
@@ -185,6 +226,87 @@ fn uninstall_mod(app: AppHandle, mod_path: String) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+// ── Archive extraction ────────────────────────────────────────────────────────
+
+fn archive_to_zip_bytes(path: &str) -> Result<Vec<u8>, String> {
+    let ext = Path::new(path)
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    match ext.as_str() {
+        "zip" => fs::read(path).map_err(|e| e.to_string()),
+        "7z"  => sevenz_to_zip_bytes(path),
+        "rar" => rar_to_zip_bytes(path),
+        _     => Err(format!("Unsupported format: .{}", ext)),
+    }
+}
+
+fn make_temp_dir() -> Result<PathBuf, String> {
+    let tmp = std::env::temp_dir().join(format!("tk_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
+    Ok(tmp)
+}
+
+fn dir_to_zip_bytes(dir: &PathBuf) -> Result<Vec<u8>, String> {
+    use std::io::Write;
+    fn add(zw: &mut zip::ZipWriter<io::Cursor<Vec<u8>>>, base: &PathBuf, cur: &PathBuf, opts: zip::write::SimpleFileOptions) -> Result<(), String> {
+        for e in fs::read_dir(cur).map_err(|e| e.to_string())? {
+            let e = e.map_err(|e| e.to_string())?;
+            let p = e.path();
+            let rel = p.strip_prefix(base).map_err(|e| e.to_string())?;
+            let name = rel.to_string_lossy().replace('\\', "/");
+            if p.is_dir() {
+                zw.add_directory(format!("{}/", name), opts).map_err(|e| e.to_string())?;
+                add(zw, base, &p, opts)?;
+            } else {
+                zw.start_file(&name, opts).map_err(|e| e.to_string())?;
+                zw.write_all(&fs::read(&p).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+            }
+        }
+        Ok(())
+    }
+    let mut zw = zip::ZipWriter::new(io::Cursor::new(Vec::new()));
+    let opts = zip::write::SimpleFileOptions::default();
+    add(&mut zw, dir, dir, opts)?;
+    Ok(zw.finish().map_err(|e| e.to_string())?.into_inner())
+}
+
+fn sevenz_to_zip_bytes(path: &str) -> Result<Vec<u8>, String> {
+    let tmp = make_temp_dir()?;
+    sevenz_rust::decompress_file(path, &tmp).map_err(|e| e.to_string())?;
+    let result = dir_to_zip_bytes(&tmp);
+    fs::remove_dir_all(&tmp).ok();
+    result
+}
+
+fn find_7zip() -> Option<PathBuf> {
+    [r"C:\Program Files\7-Zip\7z.exe", r"C:\Program Files (x86)\7-Zip\7z.exe"]
+        .iter().map(PathBuf::from).find(|p| p.exists())
+}
+
+fn rar_to_zip_bytes(path: &str) -> Result<Vec<u8>, String> {
+    let exe = find_7zip().ok_or(
+        "RAR files require 7-Zip. Download it from 7-zip.org and install it, then try again."
+    )?;
+    let tmp = make_temp_dir()?;
+    let status = std::process::Command::new(&exe)
+        .args(["x", path, &format!("-o{}", tmp.display()), "-y"])
+        .status()
+        .map_err(|e| e.to_string())?;
+    if !status.success() {
+        fs::remove_dir_all(&tmp).ok();
+        return Err("7-Zip failed to extract the RAR file".into());
+    }
+    let result = dir_to_zip_bytes(&tmp);
+    fs::remove_dir_all(&tmp).ok();
+    result
 }
 
 // ── ZIP installation ─────────────────────────────────────────────────────────
@@ -394,7 +516,7 @@ fn install_zip_bytes(data: Vec<u8>, mods_folder: &str, zip_stem: &str, mod_name:
 
 #[tauri::command]
 fn peek_zip_name(zip_path: String) -> Result<ZipInfo, String> {
-    let data = fs::read(&zip_path).map_err(|e| e.to_string())?;
+    let data = archive_to_zip_bytes(&zip_path)?;
     let zip_stem = PathBuf::from(&zip_path)
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
@@ -406,12 +528,21 @@ fn peek_zip_name(zip_path: String) -> Result<ZipInfo, String> {
 fn install_from_zip(app: AppHandle, zip_path: String, mod_name: String) -> Result<String, String> {
     let config = load_config(&app).ok_or("No config found")?;
     let mods_folder = config.mods_folder.ok_or("No mods folder configured")?;
-    let data = fs::read(&zip_path).map_err(|e| e.to_string())?;
+    let data = archive_to_zip_bytes(&zip_path)?;
     let zip_stem = PathBuf::from(&zip_path)
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "mod".into());
-    install_zip_bytes(data, &mods_folder, &zip_stem, mod_name.trim())
+    match install_zip_bytes(data, &mods_folder, &zip_stem, mod_name.trim()) {
+        Ok(name) => {
+            write_log(&app, "INFO", &format!("Installed: {}", name));
+            Ok(name)
+        }
+        Err(e) => {
+            write_log(&app, "ERROR", &format!("Install failed for {}: {}", mod_name, e));
+            Err(e)
+        }
+    }
 }
 
 // ── Game launcher ────────────────────────────────────────────────────────────
@@ -428,7 +559,11 @@ fn launch_game(app: AppHandle) -> Result<(), String> {
     std::process::Command::new(&exe)
         .current_dir(exe.parent().unwrap())
         .spawn()
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            write_log(&app, "ERROR", &format!("Failed to launch game: {}", e));
+            e.to_string()
+        })?;
+    write_log(&app, "INFO", "Game launched");
     Ok(())
 }
 
@@ -511,6 +646,7 @@ async fn process_nxm(app: &AppHandle, nxm_url: String) -> Result<String, String>
     let installed = install_zip_bytes(bytes.to_vec(), &mods_folder, &zip_stem, &info.suggested_name)?;
 
     let _ = app.emit("nxm-installed", &installed);
+    write_log(app, "INFO", &format!("NXM installed: {}", installed));
     Ok(installed)
 }
 
@@ -612,6 +748,606 @@ fn import_profile(app: AppHandle, import_path: String) -> Result<String, String>
     Ok(profile_name)
 }
 
+// ── Unmanaged mod adoption ────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnmanagedGroup {
+    pub suggested_name: String,
+    pub files: Vec<String>,
+}
+
+#[tauri::command]
+fn get_unmanaged_paks(app: AppHandle) -> Vec<UnmanagedGroup> {
+    let Some(config) = load_config(&app) else { return vec![]; };
+    let Some(mods_folder) = config.mods_folder else { return vec![]; };
+    let Ok(inner) = derive_inner_game_folder(&mods_folder) else { return vec![]; };
+    let pak_dir = inner.join("Content").join("Paks").join("LogicMods");
+    if !pak_dir.is_dir() { return vec![]; }
+
+    let mut groups: HashMap<String, Vec<String>> = HashMap::new();
+    if let Ok(entries) = fs::read_dir(&pak_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() { continue; }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let lower = name.to_lowercase();
+            if lower.ends_with(".pak") || lower.ends_with(".utoc") || lower.ends_with(".ucas") {
+                let stem = PathBuf::from(&name)
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| name.clone());
+                groups.entry(stem).or_default().push(name);
+            }
+        }
+    }
+
+    groups.into_iter()
+        .map(|(stem, files)| UnmanagedGroup { suggested_name: stem, files })
+        .collect()
+}
+
+#[tauri::command]
+fn adopt_unmanaged_pak(app: AppHandle, suggested_name: String, mod_name: String) -> Result<(), String> {
+    let config = load_config(&app).ok_or("No config")?;
+    let mods_folder = config.mods_folder.ok_or("No mods folder")?;
+    let inner = derive_inner_game_folder(&mods_folder)?;
+    let pak_dir = inner.join("Content").join("Paks").join("LogicMods");
+    let dest = pak_dir.join(mod_name.trim());
+    fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
+
+    if let Ok(entries) = fs::read_dir(&pak_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() { continue; }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let lower = name.to_lowercase();
+            if !(lower.ends_with(".pak") || lower.ends_with(".utoc") || lower.ends_with(".ucas")) { continue; }
+            let stem = PathBuf::from(&name)
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            if stem == suggested_name {
+                fs::rename(&path, dest.join(&name)).map_err(|e| e.to_string())?;
+            }
+        }
+    }
+
+    write_log(&app, "INFO", &format!("Adopted unmanaged mod as: {}", mod_name.trim()));
+    Ok(())
+}
+
+// ── Mod pack export / import ─────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ModpackEntry {
+    pub name: String,
+    pub mod_type: String, // "pak" | "script"
+    pub enabled: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ModpackMeta {
+    app: String,
+    format_version: u32,
+    mods: Vec<ModpackEntry>,
+}
+
+fn zip_dir(
+    zw: &mut zip::ZipWriter<io::Cursor<Vec<u8>>>,
+    src: &Path,
+    prefix: &str,
+    opts: zip::write::SimpleFileOptions,
+) -> Result<(), String> {
+    use std::io::Write;
+    if let Ok(entries) = fs::read_dir(src) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let rel = entry.file_name().to_string_lossy().into_owned();
+            let zip_path = format!("{}/{}", prefix, rel);
+            if path.is_dir() {
+                zw.add_directory(format!("{}/", zip_path), opts).map_err(|e| e.to_string())?;
+                zip_dir(zw, &path, &zip_path, opts)?;
+            } else {
+                zw.start_file(&zip_path, opts).map_err(|e| e.to_string())?;
+                zw.write_all(&fs::read(&path).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn export_modpack(app: AppHandle, export_path: String) -> Result<u32, String> {
+    use std::io::Write;
+    let config = load_config(&app).ok_or("No config")?;
+    let mods_folder = config.mods_folder.ok_or("No mods folder configured")?;
+    let Ok(inner) = derive_inner_game_folder(&mods_folder) else {
+        return Err("Invalid mods folder path".into());
+    };
+    let script_dir = PathBuf::from(&mods_folder);
+    let pak_dir = inner.join("Content").join("Paks").join("LogicMods");
+
+    let mut entries: Vec<ModpackEntry> = Vec::new();
+
+    if script_dir.is_dir() {
+        for entry in fs::read_dir(&script_dir).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) { continue; }
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let enabled = path.join("enabled.txt").exists();
+            entries.push(ModpackEntry { name, mod_type: "script".into(), enabled });
+        }
+    }
+
+    if pak_dir.is_dir() {
+        for entry in fs::read_dir(&pak_dir).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) { continue; }
+            let raw = entry.file_name().to_string_lossy().into_owned();
+            let (name, enabled) = if raw.ends_with(".disabled") {
+                (raw.trim_end_matches(".disabled").to_string(), false)
+            } else {
+                (raw, true)
+            };
+            entries.push(ModpackEntry { name, mod_type: "pak".into(), enabled });
+        }
+    }
+
+    if entries.is_empty() {
+        return Err("No mods installed to export".into());
+    }
+
+    let count = entries.len() as u32;
+    let mut zw = zip::ZipWriter::new(io::Cursor::new(Vec::new()));
+    let opts = zip::write::SimpleFileOptions::default();
+
+    let meta = ModpackMeta { app: "tidekeeper".into(), format_version: 1, mods: entries.clone() };
+    zw.start_file("modpack.json", opts).map_err(|e| e.to_string())?;
+    zw.write_all(serde_json::to_string_pretty(&meta).map_err(|e| e.to_string())?.as_bytes())
+        .map_err(|e| e.to_string())?;
+
+    for entry in &entries {
+        let src_dir = match entry.mod_type.as_str() {
+            "pak" => {
+                let ep = pak_dir.join(&entry.name);
+                let dp = pak_dir.join(format!("{}.disabled", entry.name));
+                if ep.is_dir() { ep } else { dp }
+            }
+            _ => script_dir.join(&entry.name),
+        };
+        if !src_dir.is_dir() { continue; }
+        zw.add_directory(format!("{}/{}/", entry.mod_type, entry.name), opts).map_err(|e| e.to_string())?;
+        zip_dir(&mut zw, &src_dir, &format!("{}/{}", entry.mod_type, entry.name), opts)?;
+    }
+
+    let bytes = zw.finish().map_err(|e| e.to_string())?.into_inner();
+    fs::write(&export_path, bytes).map_err(|e| e.to_string())?;
+    write_log(&app, "INFO", &format!("Exported mod pack: {} mods → {}", count, export_path));
+    Ok(count)
+}
+
+#[tauri::command]
+fn peek_modpack(archive_path: String) -> Result<Vec<ModpackEntry>, String> {
+    let data = fs::read(&archive_path).map_err(|e| e.to_string())?;
+    let mut archive = zip::ZipArchive::new(io::Cursor::new(data)).map_err(|e| e.to_string())?;
+    let mut manifest = archive.by_name("modpack.json")
+        .map_err(|_| "Not a Tidekeeper mod pack (modpack.json not found)")?;
+    let mut bytes = Vec::new();
+    io::copy(&mut manifest, &mut bytes).map_err(|e| e.to_string())?;
+    let meta: ModpackMeta = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    Ok(meta.mods)
+}
+
+#[tauri::command]
+fn install_modpack(app: AppHandle, archive_path: String) -> Result<u32, String> {
+    let config = load_config(&app).ok_or("No config")?;
+    let mods_folder = config.mods_folder.ok_or("No mods folder configured")?;
+    let inner = derive_inner_game_folder(&mods_folder)?;
+    let script_dir = PathBuf::from(&mods_folder);
+    let pak_dir = inner.join("Content").join("Paks").join("LogicMods");
+
+    let data = fs::read(&archive_path).map_err(|e| e.to_string())?;
+
+    // Pass 1: read manifest
+    let meta: ModpackMeta = {
+        let mut archive = zip::ZipArchive::new(io::Cursor::new(data.as_slice())).map_err(|e| e.to_string())?;
+        let mut f = archive.by_name("modpack.json")
+            .map_err(|_| "Not a Tidekeeper mod pack (modpack.json not found)")?;
+        let mut bytes = Vec::new();
+        io::copy(&mut f, &mut bytes).map_err(|e| e.to_string())?;
+        serde_json::from_slice(&bytes).map_err(|e| e.to_string())?
+    };
+
+    // Pass 2: extract files
+    let mut archive = zip::ZipArchive::new(io::Cursor::new(data.as_slice())).map_err(|e| e.to_string())?;
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i).map_err(|e| e.to_string())?;
+        let fname = file.name().to_string();
+        if fname == "modpack.json" { continue; }
+
+        let fpath = PathBuf::from(&fname);
+        if fpath.components().any(|c| c.as_os_str() == "..") { continue; }
+
+        let parts: Vec<_> = fpath.components().collect();
+        if parts.len() < 2 { continue; }
+
+        let type_prefix = parts[0].as_os_str().to_string_lossy();
+        let base_dir = match type_prefix.as_ref() {
+            "pak"    => &pak_dir,
+            "script" => &script_dir,
+            _        => continue,
+        };
+
+        let rel: PathBuf = parts[1..].iter().collect();
+        let out = base_dir.join(&rel);
+
+        if fname.ends_with('/') {
+            fs::create_dir_all(&out).map_err(|e| e.to_string())?;
+        } else {
+            if let Some(p) = out.parent() { fs::create_dir_all(p).map_err(|e| e.to_string())?; }
+            let mut f = fs::File::create(&out).map_err(|e| e.to_string())?;
+            io::copy(&mut file, &mut f).map_err(|e| e.to_string())?;
+        }
+    }
+
+    // Fix enabled/disabled state per manifest
+    for entry in &meta.mods {
+        match entry.mod_type.as_str() {
+            "script" => {
+                let ef = script_dir.join(&entry.name).join("enabled.txt");
+                if entry.enabled { let _ = fs::write(&ef, ""); }
+                else if ef.exists() { let _ = fs::remove_file(&ef); }
+            }
+            "pak" => {
+                let ep = pak_dir.join(&entry.name);
+                let dp = pak_dir.join(format!("{}.disabled", entry.name));
+                if !entry.enabled && ep.is_dir() { let _ = fs::rename(&ep, &dp); }
+                else if entry.enabled && dp.is_dir() { let _ = fs::rename(&dp, &ep); }
+            }
+            _ => {}
+        }
+    }
+
+    let count = meta.mods.len() as u32;
+    write_log(&app, "INFO", &format!("Installed mod pack: {} mods from {}", count, archive_path));
+    Ok(count)
+}
+
+// ── Log ───────────────────────────────────────────────────────────────────────
+
+#[tauri::command]
+fn get_log(app: AppHandle) -> Vec<LogLine> {
+    let Ok(content) = fs::read_to_string(log_path(&app)) else { return vec![]; };
+    let mut lines: Vec<LogLine> = content
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.splitn(3, '|');
+            let ts = parts.next()?.parse::<u64>().ok()?;
+            let level = parts.next()?.to_string();
+            let message = parts.next()?.to_string();
+            Some(LogLine { ts, level, message })
+        })
+        .collect();
+    lines.reverse();
+    lines.truncate(500);
+    lines
+}
+
+#[tauri::command]
+fn clear_log(app: AppHandle) -> Result<(), String> {
+    fs::write(log_path(&app), "").map_err(|e| e.to_string())
+}
+
+// ── Diagnostics ──────────────────────────────────────────────────────────────
+
+fn scan_hooks(dir: &PathBuf, mod_name: &str, map: &mut HashMap<String, Vec<String>>) {
+    let Ok(entries) = fs::read_dir(dir) else { return; };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            scan_hooks(&path, mod_name, map);
+        } else if path.extension().map(|e| e.eq_ignore_ascii_case("lua")).unwrap_or(false) {
+            if let Ok(content) = fs::read_to_string(&path) {
+                for line in content.lines() {
+                    if let Some(idx) = line.find("RegisterHook(") {
+                        if let Some(hook) = lua_string_arg(&line[idx + 13..]) {
+                            map.entry(hook).or_default().push(mod_name.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn lua_string_arg(s: &str) -> Option<String> {
+    let s = s.trim_start();
+    let (q, rest) = if s.starts_with('"') { ('"', &s[1..]) }
+                    else if s.starts_with('\'') { ('\'', &s[1..]) }
+                    else { return None; };
+    rest.find(q).map(|end| rest[..end].to_string())
+}
+
+fn collect_diagnostics(app: &AppHandle) -> Vec<DiagIssue> {
+    let mut issues: Vec<DiagIssue> = Vec::new();
+
+    let Some(config) = load_config(app) else {
+        return vec![DiagIssue {
+            severity: "error".into(),
+            title: "No configuration found".into(),
+            detail: "Open Settings and configure your mods folder before running diagnostics.".into(),
+        }];
+    };
+    let Some(mods_folder) = config.mods_folder else {
+        return vec![DiagIssue {
+            severity: "error".into(),
+            title: "No mods folder configured".into(),
+            detail: "Open Settings and pick your mods folder before running diagnostics.".into(),
+        }];
+    };
+    let Ok(inner) = derive_inner_game_folder(&mods_folder) else {
+        return vec![DiagIssue {
+            severity: "error".into(),
+            title: "Invalid mods folder path".into(),
+            detail: "The configured path doesn't match the expected Subnautica 2 folder structure.".into(),
+        }];
+    };
+
+    let win64 = inner.join("Binaries").join("Win64");
+
+    if !win64.join("ue4ss").join("UE4SS.dll").exists() {
+        issues.push(DiagIssue {
+            severity: "error".into(),
+            title: "UE4SS is not installed".into(),
+            detail: "Script mods won't load. Download the SN2-specific build from Nexus (mod #36) and install via \"+\u{a0}Install ZIP\".".into(),
+        });
+    }
+
+    if win64.join("ue4ss").exists() && !win64.join("dwmapi.dll").exists() {
+        issues.push(DiagIssue {
+            severity: "error".into(),
+            title: "UE4SS proxy DLL missing".into(),
+            detail: "dwmapi.dll is absent from Binaries\\Win64. UE4SS won't initialise at all. Reinstall the SN2 UE4SS build from Nexus (mod #36).".into(),
+        });
+    }
+
+    let script_dir = PathBuf::from(&mods_folder);
+    let mut hook_map: HashMap<String, Vec<String>> = HashMap::new();
+
+    if let Ok(entries) = fs::read_dir(&script_dir) {
+        for entry in entries.flatten() {
+            if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) { continue; }
+            let mod_path = entry.path();
+            let mod_name = entry.file_name().to_string_lossy().into_owned();
+            let enabled = mod_path.join("enabled.txt").exists();
+
+            let non_marker_count = fs::read_dir(&mod_path)
+                .map(|d| d.flatten().filter(|e| e.file_name() != "enabled.txt").count())
+                .unwrap_or(0);
+            if non_marker_count == 0 {
+                issues.push(DiagIssue {
+                    severity: "warning".into(),
+                    title: format!("{}: folder appears empty", mod_name),
+                    detail: "No mod files found here — this mod may not have installed correctly.".into(),
+                });
+            }
+
+            if enabled { scan_hooks(&mod_path, &mod_name, &mut hook_map); }
+        }
+    }
+
+    for (hook, mods) in &hook_map {
+        let mut seen = std::collections::HashSet::new();
+        let unique: Vec<&str> = mods.iter()
+            .filter(|m| seen.insert(m.as_str()))
+            .map(|m| m.as_str())
+            .collect();
+        if unique.len() > 1 {
+            issues.push(DiagIssue {
+                severity: "warning".into(),
+                title: format!("Hook conflict: {}", hook),
+                detail: format!("{} both register this hook — one may override the other.", unique.join(" and ")),
+            });
+        }
+    }
+
+    let pak_dir = inner.join("Content").join("Paks").join("LogicMods");
+    if pak_dir.is_dir() {
+        if let Ok(entries) = fs::read_dir(&pak_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let lower = name.to_lowercase();
+
+                if path.is_file() && (lower.ends_with(".pak") || lower.ends_with(".utoc") || lower.ends_with(".ucas")) {
+                    issues.push(DiagIssue {
+                        severity: "warning".into(),
+                        title: format!("Unmanaged file: {}", name),
+                        detail: "This file is loose in LogicMods\\ rather than in a subfolder. Tidekeeper can't track or disable it.".into(),
+                    });
+                }
+
+                if path.is_dir() {
+                    let display = name.trim_end_matches(".disabled").to_string();
+                    let (mut has_pak, mut has_utoc, mut has_ucas) = (false, false, false);
+                    if let Ok(files) = fs::read_dir(&path) {
+                        for f in files.flatten() {
+                            let fname = f.file_name().to_string_lossy().to_lowercase();
+                            if fname.ends_with(".pak")  { has_pak  = true; }
+                            if fname.ends_with(".utoc") { has_utoc = true; }
+                            if fname.ends_with(".ucas") { has_ucas = true; }
+                        }
+                    }
+                    if (has_pak || has_utoc || has_ucas) && !(has_pak && has_utoc && has_ucas) {
+                        let missing: Vec<&str> = [
+                            if !has_pak  { Some(".pak")  } else { None },
+                            if !has_utoc { Some(".utoc") } else { None },
+                            if !has_ucas { Some(".ucas") } else { None },
+                        ].into_iter().flatten().collect();
+                        issues.push(DiagIssue {
+                            severity: "error".into(),
+                            title: format!("{}: incomplete pak files", display),
+                            detail: format!("Missing {} — this mod likely won't load in-game. Try reinstalling it.", missing.join(", ")),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    if issues.is_empty() {
+        issues.push(DiagIssue {
+            severity: "ok".into(),
+            title: "All checks passed".into(),
+            detail: "No issues detected. Your mod setup looks healthy.".into(),
+        });
+    }
+
+    issues
+}
+
+#[tauri::command]
+fn run_diagnostics(app: AppHandle) -> Vec<DiagIssue> {
+    let issues = collect_diagnostics(&app);
+    let issue_count = issues.iter().filter(|i| i.severity != "ok").count();
+    write_log(&app, "INFO", &format!("Diagnostics ran — {} issue(s) found", issue_count));
+    for issue in &issues {
+        match issue.severity.as_str() {
+            "error"   => write_log(&app, "ERROR", &format!("Diagnostic: {}", issue.title)),
+            "warning" => write_log(&app, "WARN",  &format!("Diagnostic: {}", issue.title)),
+            _ => {}
+        }
+    }
+    issues
+}
+
+#[tauri::command]
+fn export_report(app: AppHandle, export_path: String, generated_at: String) -> Result<(), String> {
+    use std::fmt::Write as FmtWrite;
+    let mut out = String::new();
+
+    writeln!(out, "=== Tidekeeper Diagnostic Report ===").ok();
+    writeln!(out, "Generated : {}", generated_at).ok();
+    writeln!(out).ok();
+
+    // Configuration
+    writeln!(out, "--- Configuration ---").ok();
+    match load_config(&app) {
+        None => { writeln!(out, "(no configuration found)").ok(); }
+        Some(cfg) => {
+            writeln!(out, "Mods folder : {}", cfg.mods_folder.as_deref().unwrap_or("(not set)")).ok();
+            writeln!(out, "Nexus API   : {}", if cfg.nexus_api_key.is_some() { "configured" } else { "(not set)" }).ok();
+        }
+    }
+    writeln!(out).ok();
+
+    // System checks
+    writeln!(out, "--- System Checks ---").ok();
+    for issue in collect_diagnostics(&app) {
+        let tag = match issue.severity.as_str() {
+            "error"   => "[ERROR]",
+            "warning" => "[WARN] ",
+            _         => "[OK]   ",
+        };
+        writeln!(out, "{} {}", tag, issue.title).ok();
+        if issue.severity != "ok" {
+            writeln!(out, "        {}", issue.detail).ok();
+        }
+    }
+    writeln!(out).ok();
+
+    // Tidekeeper activity log (last 100 entries, oldest→newest)
+    writeln!(out, "--- Tidekeeper Activity Log (last 100 entries) ---").ok();
+    writeln!(out, "(format: unix_timestamp | LEVEL | message)").ok();
+    match fs::read_to_string(log_path(&app)) {
+        Err(_) => { writeln!(out, "(log file not found)").ok(); }
+        Ok(ref s) if s.trim().is_empty() => { writeln!(out, "(empty)").ok(); }
+        Ok(content) => {
+            let all: Vec<&str> = content.lines().collect();
+            let start = all.len().saturating_sub(100);
+            for line in &all[start..] { writeln!(out, "{}", line).ok(); }
+        }
+    }
+    writeln!(out).ok();
+
+    // UE4SS log (last 400 lines)
+    writeln!(out, "--- UE4SS Log (last 400 lines) ---").ok();
+    let ue4ss_content = load_config(&app)
+        .and_then(|c| c.mods_folder)
+        .and_then(|mf| PathBuf::from(&mf).parent().map(|p| p.to_path_buf()))
+        .map(|d| d.join("UE4SS.log"))
+        .and_then(|p| fs::read_to_string(p).ok());
+
+    match ue4ss_content {
+        None => { writeln!(out, "(UE4SS.log not found — run the game once with UE4SS installed)").ok(); }
+        Some(content) => {
+            let lines: Vec<&str> = content.lines().collect();
+            let start = lines.len().saturating_sub(400);
+            for line in &lines[start..] { writeln!(out, "{}", line).ok(); }
+        }
+    }
+
+    fs::write(&export_path, out).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_ue4ss_log(app: AppHandle) -> Result<String, String> {
+    let config = load_config(&app).ok_or("No config")?;
+    let mods_folder = config.mods_folder.ok_or("No mods folder configured")?;
+    let ue4ss_dir = PathBuf::from(&mods_folder)
+        .parent()
+        .ok_or("Invalid mods folder path")?
+        .to_path_buf();
+    let log_file = ue4ss_dir.join("UE4SS.log");
+    if !log_file.exists() {
+        return Err("UE4SS.log not found. Run the game at least once with UE4SS installed to generate it.".into());
+    }
+    let content = fs::read_to_string(&log_file).map_err(|e| e.to_string())?;
+    // Return last 400 lines — UE4SS logs can be very long
+    let lines: Vec<&str> = content.lines().collect();
+    let start = lines.len().saturating_sub(400);
+    Ok(lines[start..].join("\n"))
+}
+
+// ── App updater ──────────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateInfo {
+    pub available: bool,
+    pub version: Option<String>,
+    pub notes: Option<String>,
+}
+
+async fn try_check_update(app: &AppHandle) -> Result<UpdateInfo, String> {
+    let updater = app.updater_builder().build().map_err(|e| e.to_string())?;
+    match updater.check().await.map_err(|e| e.to_string())? {
+        Some(update) => Ok(UpdateInfo {
+            available: true,
+            version: Some(update.version.to_string()),
+            notes: update.body.clone(),
+        }),
+        None => Ok(UpdateInfo { available: false, version: None, notes: None }),
+    }
+}
+
+#[tauri::command]
+async fn check_for_update(app: AppHandle) -> UpdateInfo {
+    // Silently return available:false on any error (e.g. dev mode, no network)
+    try_check_update(&app).await.unwrap_or(UpdateInfo { available: false, version: None, notes: None })
+}
+
+#[tauri::command]
+async fn install_update(app: AppHandle) -> Result<(), String> {
+    let updater = app.updater_builder().build().map_err(|e| e.to_string())?;
+    let update = updater.check().await.map_err(|e| e.to_string())?
+        .ok_or("No update available")?;
+    update.download_and_install(|_, _| {}, || {}).await.map_err(|e| e.to_string())
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -620,6 +1356,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(NxmQueue::default())
         .setup(|app| {
             #[cfg(debug_assertions)]
@@ -634,6 +1371,7 @@ pub fn run() {
                         let h = handle.clone();
                         tauri::async_runtime::spawn(async move {
                             if let Err(e) = process_nxm(&h, url_str).await {
+                                write_log(&h, "ERROR", &format!("NXM download failed: {}", e));
                                 let _ = h.emit("nxm-error", e);
                             }
                         });
@@ -670,6 +1408,18 @@ pub fn run() {
             delete_profile,
             export_profile,
             import_profile,
+            get_unmanaged_paks,
+            adopt_unmanaged_pak,
+            export_modpack,
+            peek_modpack,
+            install_modpack,
+            run_diagnostics,
+            export_report,
+            get_log,
+            clear_log,
+            get_ue4ss_log,
+            check_for_update,
+            install_update,
         ])
         .run(tauri::generate_context!())
         .expect("error running Tidekeeper");

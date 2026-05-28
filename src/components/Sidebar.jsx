@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { openUrl } from '@tauri-apps/plugin-opener';
+import appIcon from '../assets/icon.png';
 
 const NAV = [
   {
@@ -38,11 +39,11 @@ async function launchGame() {
   }
 }
 
-export default function Sidebar({ activeTab, onTabChange }) {
+export default function Sidebar({ activeTab, onTabChange, hasUpdate }) {
   return (
     <aside className="sidebar">
       <div className="sidebar-brand">
-        <span className="brand-icon">◈</span>
+        <img src={appIcon} className="brand-icon-img" alt="" />
         <span className="brand-name">Tidekeeper</span>
       </div>
 
@@ -55,6 +56,7 @@ export default function Sidebar({ activeTab, onTabChange }) {
           >
             {item.icon}
             {item.label}
+            {item.id === 'settings' && hasUpdate && <span className="nav-update-dot" />}
           </button>
         ))}
       </nav>

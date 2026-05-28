@@ -155,6 +155,14 @@ html, body, #root {
   filter: drop-shadow(0 0 8px var(--accent-glow));
 }
 
+.brand-icon-img {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+  flex-shrink: 0;
+  filter: drop-shadow(0 0 6px var(--accent-glow));
+}
+
 .brand-name {
   font-size: 13px;
   font-weight: 700;
@@ -198,6 +206,15 @@ html, body, #root {
   font-weight: 700;
   padding: 1px 6px;
   border-radius: 10px;
+}
+
+.nav-update-dot {
+  margin-left: auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--success);
+  flex-shrink: 0;
 }
 
 .sidebar-footer {
@@ -492,6 +509,96 @@ html, body, #root {
   flex-shrink: 0;
 }
 
+/* ── Unmanaged mod adoption ────────────────────────────── */
+.unmanaged-section {
+  border-bottom: 1px solid rgba(0,212,255,0.15);
+  background: rgba(0,212,255,0.04);
+  flex-shrink: 0;
+}
+
+.unmanaged-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 18px;
+  font-size: 12px;
+  color: var(--accent);
+  border-bottom: 1px solid rgba(0,212,255,0.1);
+}
+
+.unmanaged-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 18px;
+  border-bottom: 1px solid rgba(0,212,255,0.08);
+}
+.unmanaged-row:last-child { border-bottom: none; }
+
+.unmanaged-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+
+.unmanaged-file {
+  font-size: 11px;
+  font-family: 'Consolas', 'JetBrains Mono', monospace;
+  color: var(--text2);
+  background: var(--bg3);
+  border: 1px solid var(--border2);
+  border-radius: 3px;
+  padding: 1px 6px;
+}
+
+/* ── Mod pack modal ────────────────────────────────────── */
+.pack-mod-list {
+  max-height: 260px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pack-mod-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--bg3);
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.pack-mod-name {
+  flex: 1;
+  font-weight: 500;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pack-mod-state {
+  font-size: 11px;
+  color: var(--text3);
+  flex-shrink: 0;
+}
+
+.pack-conflict-badge {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--error);
+  border: 1px solid var(--error);
+  border-radius: 3px;
+  padding: 1px 5px;
+  flex-shrink: 0;
+}
+
 /* ── Library list ──────────────────────────────────────── */
 .library-list {
   flex: 1;
@@ -780,6 +887,101 @@ html, body, #root {
 .file-name    { font-size: 13px; color: var(--text1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .file-version { font-size: 11px; color: var(--accent); }
 .file-size    { font-size: 11px; color: var(--text3); }
+
+/* ── Diagnostics modal ─────────────────────────────────── */
+.diag-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.diag-issue {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--r-sm);
+  background: var(--bg3);
+  border: 1px solid var(--border);
+}
+
+.diag-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-top: 4px;
+}
+
+.diag-error   .diag-dot { background: var(--error);   box-shadow: 0 0 6px rgba(255,74,110,0.4); }
+.diag-warning .diag-dot { background: #ffb432;         box-shadow: 0 0 6px rgba(255,180,50,0.4); }
+.diag-ok      .diag-dot { background: var(--success);  box-shadow: 0 0 6px rgba(0,212,160,0.4); }
+
+.diag-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.diag-title { font-size: 13px; font-weight: 600; color: var(--text); }
+.diag-error   .diag-title { color: var(--error); }
+.diag-warning .diag-title { color: #ffb432; }
+.diag-ok      .diag-title { color: var(--success); }
+
+.diag-detail { font-size: 11px; color: var(--text2); line-height: 1.5; }
+
+/* ── Log viewer ─────────────────────────────────────────── */
+.log-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.log-entry {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 6px;
+  border-radius: 3px;
+  font-family: 'Consolas', 'JetBrains Mono', monospace;
+  font-size: 11px;
+}
+.log-entry:hover { background: var(--bg3); }
+
+.log-ts    { color: var(--text3); white-space: nowrap; flex-shrink: 0; }
+.log-level { font-weight: 700; flex-shrink: 0; width: 40px; }
+.log-level-info  { color: var(--text2); }
+.log-level-warn  { color: #ffb432; }
+.log-level-error { color: var(--error); }
+.log-msg   { color: var(--text); word-break: break-word; }
+
+/* ── UE4SS log panel ────────────────────────────────────── */
+.ue4ss-log-wrap {
+  max-height: 360px;
+  overflow-y: auto;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+
+.ue4ss-log-content {
+  display: block;
+  padding: 8px 10px;
+  font-family: 'Consolas', 'JetBrains Mono', monospace;
+  font-size: 10.5px;
+  line-height: 1.6;
+  color: var(--text2);
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 0;
+}
+
+.ue4ss-line-error { color: var(--error); }
+.ue4ss-line-warn  { color: #ffb432; }
 
 /* ── Scrollbars ────────────────────────────────────────── */
 ::-webkit-scrollbar              { width: 5px; }
