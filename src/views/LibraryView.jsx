@@ -25,6 +25,8 @@ export default function LibraryView({ config, onConfigChange }) {
   const [ue4ssLog, setUe4ssLog]       = useState(null);
   const [packPreview, setPackPreview]   = useState(null); // { path, mods }
   const [packInstalling, setPackInstalling] = useState(false);
+  const [packCreateProfile, setPackCreateProfile] = useState(true);
+  const [packProfileName, setPackProfileName]     = useState('');
   const [updateStatuses, setUpdateStatuses] = useState({}); // modPath → ModUpdateStatus
   const [checkingUpdates, setCheckingUpdates] = useState(false);
 
@@ -207,6 +209,9 @@ export default function LibraryView({ config, onConfigChange }) {
     if (!path) return;
     try {
       const mods = await invoke('peek_modpack', { archivePath: path });
+      const fileName = path.replace(/\\/g, '/').split('/').pop().replace(/\.tkpack$/i, '');
+      setPackProfileName(fileName);
+      setPackCreateProfile(true);
       setPackPreview({ path, mods });
     } catch (e) { alert(`Could not read mod pack: ${e}`); }
   }
@@ -216,11 +221,18 @@ export default function LibraryView({ config, onConfigChange }) {
     setPackInstalling(true);
     try {
       const count = await invoke('install_modpack', { archivePath: packPreview.path });
+      const profileName = packCreateProfile ? packProfileName.trim() : '';
+      if (profileName) {
+        await invoke('save_profile', { profileName });
+        const cfg = await invoke('get_config');
+        onConfigChange(cfg);
+      }
       setPackPreview(null);
-      setInstallMsg({ ok: true, text: `Installed ${count} mod${count !== 1 ? 's' : ''} from pack` });
+      const profileNote = profileName ? ` — saved as profile "${profileName}"` : '';
+      setInstallMsg({ ok: true, text: `Installed ${count} mod${count !== 1 ? 's' : ''} from pack${profileNote}` });
       await load();
       invoke('check_ue4ss').then(ok => setUe4ssOk(ok));
-      setTimeout(() => setInstallMsg(null), 4000);
+      setTimeout(() => setInstallMsg(null), 6000);
     } catch (e) {
       alert(`Install failed: ${e}`);
     } finally {
@@ -585,9 +597,25 @@ export default function LibraryView({ config, onConfigChange }) {
                 ));
               })()}
             </div>
-            <div style={{display:'flex', gap:'8px', marginTop:'12px', justifyContent:'flex-end'}}>
+            <div style={{display:'flex', alignItems:'center', gap:'10px', marginTop:'12px', padding:'10px 12px', background:'var(--bg3)', borderRadius:'var(--r-sm)', border:'1px solid var(--border2)'}}>
+              <label className="toggle" style={{flexShrink:0}}>
+                <input type="checkbox" checked={packCreateProfile} onChange={e => setPackCreateProfile(e.target.checked)} />
+                <span className="toggle-track" />
+              </label>
+              <span style={{fontSize:'12px', color:'var(--text2)', flexShrink:0}}>Save as profile</span>
+              {packCreateProfile && (
+                <input
+                  className="input"
+                  style={{flex:1, minWidth:0}}
+                  value={packProfileName}
+                  onChange={e => setPackProfileName(e.target.value)}
+                  placeholder="Profile name…"
+                />
+              )}
+            </div>
+            <div style={{display:'flex', gap:'8px', marginTop:'8px', justifyContent:'flex-end'}}>
               <button className="btn-ghost sm" onClick={() => setPackPreview(null)} disabled={packInstalling}>Cancel</button>
-              <button className="btn-primary sm" onClick={installModPack} disabled={packInstalling}>
+              <button className="btn-primary sm" onClick={installModPack} disabled={packInstalling || (packCreateProfile && !packProfileName.trim())}>
                 {packInstalling ? 'Installing…' : 'Install All'}
               </button>
             </div>
