@@ -24,7 +24,6 @@ Browse, install, and manage mods from Nexus Mods directly inside the app. Suppor
 
 - **Windows 10 or later** (64-bit)
 - **Subnautica 2** installed
-- **UE4SS** installed inside your Subnautica 2 directory — required for script mods. Download from [UE4SS Releases](https://github.com/UE4SS-RE/RE-UE4SS/releases)
 - **Nexus Mods account** with a Personal API Key (free tier works)
 - **7-Zip** installed at the default path (`C:\Program Files\7-Zip\`) — only required if you install mods packaged as `.rar` archives
 
@@ -40,6 +39,10 @@ The UE4SS Mods folder is typically located at:
 ```
 C:\Program Files (x86)\Steam\steamapps\common\Subnautica2\Binaries\Win64\ue4ss\Mods
 ```
+
+### Installing UE4SS
+
+UE4SS is required for script mods. Tidekeeper installs it for you — download the Subnautica 2 build from [Nexus Mods (mod #36)](https://www.nexusmods.com/subnautica2/mods/36), then use **+ Install ZIP** in the Library tab. Tidekeeper detects the UE4SS archive automatically and places the files in the correct location. The **Diagnostics** tool will warn you if UE4SS is missing or not set up correctly.
 
 ---
 
