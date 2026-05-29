@@ -144,6 +144,28 @@ export default function SettingsView({ config, onConfigChange, updateInfo, onRec
           )}
         </section>
 
+        {/* Nexus Account */}
+        <section className="settings-section">
+          <h3>Nexus Account</h3>
+          <p className="settings-hint">
+            Sign in with your Nexus Mods account to install mods without needing to manage an API key manually.
+          </p>
+          <div className="nexus-login-box">
+            <button className="btn-ghost sm" disabled style={{opacity:0.45, cursor:'not-allowed'}}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/>
+              </svg>
+              Sign in with Nexus Mods
+            </button>
+            <span className="nexus-login-pending">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{flexShrink:0}}>
+                <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+              </svg>
+              Waiting for Nexus approval — coming soon
+            </span>
+          </div>
+        </section>
+
         {/* Mods Folder */}
         <section className="settings-section">
           <h3>Mods Folder</h3>

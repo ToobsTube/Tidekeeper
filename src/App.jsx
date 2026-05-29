@@ -7,6 +7,7 @@ import SetupView from './views/SetupView';
 import DiscoverView from './views/DiscoverView';
 import LibraryView from './views/LibraryView';
 import SettingsView from './views/SettingsView';
+import UpdatesView from './views/UpdatesView';
 
 function NxmBanner({ notif, onDismiss }) {
   if (!notif) return null;
@@ -103,15 +104,7 @@ export default function App() {
             <main className="content-area">
               {tab === 'discover'  && <DiscoverView config={config} onTabChange={setTab} isPremium={isPremium} />}
               {tab === 'library'   && <LibraryView config={config} onConfigChange={setConfig} />}
-              {tab === 'updates'   && (
-                <div className="empty-state">
-                  <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
-                    <polyline points="23 4 23 10 17 10"/>
-                    <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
-                  </svg>
-                  <p>Update checking coming in a future version.</p>
-                </div>
-              )}
+              {tab === 'updates'   && <UpdatesView config={config} onTabChange={setTab} />}
               {tab === 'settings'  && <SettingsView config={config} onConfigChange={handleConfigChange} updateInfo={updateInfo} onRecheckUpdate={recheckUpdate} />}
             </main>
           </>
