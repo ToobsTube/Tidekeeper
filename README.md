@@ -90,6 +90,21 @@ This is useful for multiplayer — everyone can run the same mods without manual
 
 ---
 
+## Roadmap
+
+- [x] Browse and install mods from Nexus Mods (Discover tab)
+- [x] Mod Manager Download / NXM protocol support
+- [x] Mod pack export and import (.tkpack) for sharing with friends
+- [x] App auto-updater
+- [x] Installed mod tracking with source metadata and version info
+- [x] Mod update checker
+- [x] Theme picker (preset colors + custom)
+- [ ] Appear in the Nexus Mods mod manager dropdown (NXM registration pending approval)
+- [ ] Dedicated Updates tab for managing all available mod updates in one place
+- [ ] Support for multiple game installations (e.g. experimental vs live branch)
+
+---
+
 ## Building from Source
 
 Requirements: [Rust](https://rustup.rs/) and [Node.js](https://nodejs.org/) 18+
