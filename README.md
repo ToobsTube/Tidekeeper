@@ -13,10 +13,11 @@ Browse, install, and manage mods from Nexus Mods directly inside the app. Suppor
 - Direct install from the app for Nexus Premium members
 - Enable and disable mods without uninstalling them
 - **Mod profiles** — save and switch between different mod loadouts
-- **Mod pack export/import** (.tkpack) — bundle your entire mod list and share it with friends
-- **Update checker** — see which installed mods have newer versions available on Nexus
+- **Mod pack export/import** (.tkpack) — bundle your entire mod list and share it with friends. When importing, choose to save it as a profile so you can switch between your setup and a friend's with one click
+- **Updates tab** — see which of your installed Nexus mods have newer versions available and jump straight to the files page
 - Supports ZIP, 7z, and RAR archives
 - App auto-updater — stay up to date automatically
+- Theme picker — choose from preset accent colors or pick a custom one
 
 ---
 
@@ -99,8 +100,10 @@ This is useful for multiplayer — everyone can run the same mods without manual
 - [x] Installed mod tracking with source metadata and version info
 - [x] Mod update checker
 - [x] Theme picker (preset colors + custom)
+- [x] Updates tab — dedicated view for checking and acting on available mod updates
+- [x] Profile creation on mod pack import — switch between your setup and a friend's in one click
 - [ ] Appear in the Nexus Mods mod manager dropdown (NXM registration pending approval)
-- [ ] Dedicated Updates tab for managing all available mod updates in one place
+- [ ] Nexus account sign-in (replaces manual API key — pending Nexus approval)
 - [ ] Support for multiple game installations (e.g. experimental vs live branch)
 
 ---

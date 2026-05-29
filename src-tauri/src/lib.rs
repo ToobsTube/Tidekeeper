@@ -662,7 +662,7 @@ async fn process_nxm(app: &AppHandle, nxm_url: String) -> Result<String, String>
         .get(&api_url)
         .header("apikey", &api_key)
         .header("Application-Name", "Tidekeeper")
-        .header("Application-Version", "0.3.0")
+        .header("Application-Version", "0.4.0")
         .send().await.map_err(|e| e.to_string())?
         .json().await.map_err(|e| format!("Failed to parse download links: {}", e))?;
 
@@ -740,7 +740,7 @@ async fn validate_nexus_key(app: AppHandle) -> Result<NexusUserInfo, String> {
         .get("https://api.nexusmods.com/v1/users/validate.json")
         .header("apikey", &api_key)
         .header("Application-Name", "Tidekeeper")
-        .header("Application-Version", "0.3.0")
+        .header("Application-Version", "0.4.0")
         .send().await.map_err(|e| e.to_string())?
         .json().await.map_err(|e| e.to_string())?;
     Ok(NexusUserInfo {
@@ -800,7 +800,7 @@ async fn get_nexus_mod_files(app: AppHandle, mod_id: u64) -> Result<Vec<NexusFil
         .get(&url)
         .header("apikey", &api_key)
         .header("Application-Name", "Tidekeeper")
-        .header("Application-Version", "0.3.0")
+        .header("Application-Version", "0.4.0")
         .send().await.map_err(|e| e.to_string())?
         .json().await.map_err(|e| format!("Failed to parse files: {}", e))?;
     // Only show MAIN (1) and OPTIONAL (3) — exclude old versions and deleted
@@ -836,7 +836,7 @@ async fn install_nexus_mod(app: AppHandle, mod_id: u64, file_id: u64, version: O
         .get(&links_url)
         .header("apikey", &api_key)
         .header("Application-Name", "Tidekeeper")
-        .header("Application-Version", "0.3.0")
+        .header("Application-Version", "0.4.0")
         .send().await.map_err(|e| e.to_string())?;
     if !links_resp.status().is_success() {
         let body: serde_json::Value = links_resp.json().await.unwrap_or_default();
@@ -937,7 +937,7 @@ async fn check_mod_updates(app: AppHandle) -> Vec<ModUpdateStatus> {
             let r = client.get(&url)
                 .header("apikey", &api_key)
                 .header("Application-Name", "Tidekeeper")
-                .header("Application-Version", "0.3.0")
+                .header("Application-Version", "0.4.0")
                 .send().await.ok()?;
             r.json::<NexusModInfo>().await.ok()?.version
         }.await;
