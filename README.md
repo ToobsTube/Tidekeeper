@@ -42,7 +42,9 @@ C:\Program Files (x86)\Steam\steamapps\common\Subnautica2\Binaries\Win64\ue4ss\M
 
 ### Installing UE4SS
 
-UE4SS is required for script mods. Tidekeeper installs it for you — download the Subnautica 2 build from [Nexus Mods (mod #36)](https://www.nexusmods.com/subnautica2/mods/36), then use **+ Install ZIP** in the Library tab. Tidekeeper detects the UE4SS archive automatically and places the files in the correct location. The **Diagnostics** tool will warn you if UE4SS is missing or not set up correctly.
+UE4SS is required for script mods. Tidekeeper installs it for you — but you must use the **Subnautica 2 specific build from Nexus Mods**, not the generic release from GitHub. The GitHub version will not work.
+
+Download the SN2 build from [Nexus Mods (mod #36)](https://www.nexusmods.com/subnautica2/mods/36), then use **+ Install ZIP** in the Library tab. Tidekeeper detects the UE4SS archive automatically and places the files in the correct location. The **Diagnostics** tool will warn you if UE4SS is missing or not set up correctly.
 
 ---
 
