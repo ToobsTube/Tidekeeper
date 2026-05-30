@@ -474,7 +474,15 @@ export default function LibraryView({ config, onConfigChange }) {
               <div key={mod.path} className="mod-row">
                 <span className={`mod-row-name${mod.enabled ? '' : ' disabled'}`}>{mod.name}</span>
                 {mod.modType === 'pak' && <span className="mod-type-badge">PAK</span>}
-                {mod.meta?.source === 'nexus' && <span className="mod-source-badge">Nexus</span>}
+                {mod.meta?.source === 'nexus' && (
+                  mod.meta?.modId
+                    ? <button
+                        className="mod-source-badge mod-source-link"
+                        title="Open mod page on Nexus"
+                        onClick={() => openUrl(`https://www.nexusmods.com/subnautica2/mods/${mod.meta.modId}`)}
+                      >Nexus ↗</button>
+                    : <span className="mod-source-badge">Nexus</span>
+                )}
                 {mod.meta?.version && <span className="mod-version-badge">v{mod.meta.version}</span>}
                 {upd?.hasUpdate && (
                   <span className="mod-update-badge" title={`Update available: v${upd.latestVersion}`}>

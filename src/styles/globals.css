@@ -684,6 +684,13 @@ html, body, #root {
   background: rgba(0,150,255,0.1); color: #4da6ff;
   border: 1px solid rgba(0,150,255,0.22);
 }
+.mod-source-link {
+  cursor: pointer; background: none;
+  transition: background 0.15s, border-color 0.15s;
+}
+.mod-source-link:hover {
+  background: rgba(0,150,255,0.2); border-color: rgba(0,150,255,0.45);
+}
 .mod-version-badge {
   font-size: 10px; color: var(--text2);
   padding: 2px 5px; border-radius: 4px; flex-shrink: 0;
