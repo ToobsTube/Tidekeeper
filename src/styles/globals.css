@@ -510,6 +510,24 @@ html, body, #root {
   flex-shrink: 0;
 }
 
+/* ── Variant conflict banner ───────────────────────────── */
+.conflict-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 18px;
+  background: rgba(255,80,80,0.07);
+  border-bottom: 1px solid rgba(255,80,80,0.2);
+  color: #ff6b6b;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.mod-row-conflict {
+  outline: 1px solid rgba(255,80,80,0.3);
+  outline-offset: -1px;
+  background: rgba(255,80,80,0.04);
+}
+
 /* ── Unmanaged mod adoption ────────────────────────────── */
 .unmanaged-section {
   border-bottom: 1px solid rgba(0,212,255,0.15);

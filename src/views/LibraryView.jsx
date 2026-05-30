@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { open, save } from '@tauri-apps/plugin-dialog';
@@ -30,6 +30,25 @@ export default function LibraryView({ config, onConfigChange }) {
   const [packProfileName, setPackProfileName]     = useState('');
   const [updateStatuses, setUpdateStatuses] = useState({}); // modPath → ModUpdateStatus
   const [checkingUpdates, setCheckingUpdates] = useState(false);
+
+  // Detect enabled mods that share the same Nexus mod_id (variant conflicts)
+  const conflictGroups = useMemo(() => {
+    if (!mods) return [];
+    const byModId = {};
+    for (const mod of mods) {
+      if (!mod.meta?.modId || !mod.enabled) continue;
+      const id = mod.meta.modId;
+      if (!byModId[id]) byModId[id] = [];
+      byModId[id].push(mod);
+    }
+    return Object.values(byModId).filter(g => g.length > 1);
+  }, [mods]);
+
+  const conflictPaths = useMemo(() => {
+    const set = new Set();
+    for (const group of conflictGroups) for (const m of group) set.add(m.path);
+    return set;
+  }, [conflictGroups]);
 
   // Profile state
   const profiles  = config?.profiles ?? {};
@@ -419,6 +438,22 @@ export default function LibraryView({ config, onConfigChange }) {
         </div>
       )}
 
+      {conflictGroups.length > 0 && (
+        <div className="conflict-banner">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{flexShrink:0}}>
+            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+            <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+          </svg>
+          <div style={{display:'flex', flexDirection:'column', gap:'3px'}}>
+            {conflictGroups.map((group, i) => (
+              <span key={i}>
+                <strong>Variant conflict:</strong> {group.map(m => m.meta?.displayName ?? m.name).join(' and ')} share the same mod — disable one to avoid issues.
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
       {unmanaged.filter(g => !dismissed.has(g.suggestedName)).length > 0 && (
         <div className="unmanaged-section">
           <div className="unmanaged-header">
@@ -479,7 +514,7 @@ export default function LibraryView({ config, onConfigChange }) {
           mods.map(mod => {
             const upd = updateStatuses[mod.path];
             return (
-              <div key={mod.path} className="mod-row">
+              <div key={mod.path} className={`mod-row${conflictPaths.has(mod.path) ? ' mod-row-conflict' : ''}`}>
                 <span className={`mod-row-name${mod.enabled ? '' : ' disabled'}`}>
                   {mod.meta?.displayName ?? mod.name}
                   {mod.meta?.displayName && mod.meta.displayName !== mod.name && (

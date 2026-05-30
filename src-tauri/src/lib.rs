@@ -814,35 +814,60 @@ async fn process_nxm(app: &AppHandle, nxm_url: String) -> Result<String, String>
     // Convert to ZIP bytes (handles .zip, .7z, .rar)
     let zip_bytes = archive_to_zip_bytes(&saved_path.to_string_lossy())?;
     let info = analyze_zip(&zip_bytes, &zip_stem)?;
-    let installed = install_zip_bytes(zip_bytes, &mods_folder, &zip_stem, &info.suggested_name)?;
+
+    // Extract clean variant name from download filename: "gravestone-waypoint-lite-1234-1-0-…" → "gravestone-waypoint-lite"
+    let file_name_clean: Option<String> = info.nexus_mod_id.and_then(|mid| {
+        let prefix = format!("-{}-", mid);
+        zip_stem.split_once(&prefix).map(|(before, _)| before.to_string())
+    });
+    let folder_name = file_name_clean.as_deref().unwrap_or(&info.suggested_name);
+    let installed = install_zip_bytes(zip_bytes, &mods_folder, &zip_stem, folder_name)?;
 
     // Write nexus source metadata
     let mod_id_u64: Option<u64> = mod_id.parse().ok();
     let file_id_u64: Option<u64> = file_id.parse().ok();
 
-    // Fetch the Nexus display name for the library
-    let display_name: Option<String> = if let Some(mid) = mod_id_u64 {
-        let url = format!("https://api.nexusmods.com/v1/games/subnautica2/mods/{}.json", mid);
-        match client.get(&url)
+    // Fetch mod display name and file variant name/version from Nexus
+    let mut display_name: Option<String> = None;
+    let mut file_variant_name: Option<String> = None;
+    let mut file_version: Option<String> = None;
+
+    if let (Some(mid), Some(fid)) = (mod_id_u64, file_id_u64) {
+        let mod_url  = format!("https://api.nexusmods.com/v1/games/subnautica2/mods/{}.json", mid);
+        let file_url = format!("https://api.nexusmods.com/v1/games/subnautica2/mods/{}/files/{}.json", mid, fid);
+
+        if let Ok(resp) = client.get(&mod_url)
             .header(auth_header.as_str(), auth_value.as_str())
             .header("Application-Name", "Tidekeeper")
             .header("Application-Version", "0.5.1")
             .send().await
         {
-            Ok(resp) => resp.json::<serde_json::Value>().await.ok()
-                .and_then(|j| j.get("name").and_then(|v| v.as_str()).map(str::to_string)),
-            Err(_) => None,
+            if let Ok(j) = resp.json::<serde_json::Value>().await {
+                display_name = j.get("name").and_then(|v| v.as_str()).map(str::to_string);
+            }
         }
-    } else { None };
+
+        if let Ok(resp) = client.get(&file_url)
+            .header(auth_header.as_str(), auth_value.as_str())
+            .header("Application-Name", "Tidekeeper")
+            .header("Application-Version", "0.5.1")
+            .send().await
+        {
+            if let Ok(j) = resp.json::<serde_json::Value>().await {
+                file_variant_name = j.get("name").and_then(|v| v.as_str()).map(str::to_string);
+                file_version      = j.get("version").and_then(|v| v.as_str()).map(str::to_string);
+            }
+        }
+    }
 
     if let Some(mod_path) = mod_install_path(&info.install_type, &mods_folder, &installed) {
         let meta = ModMeta {
             source: "nexus".into(),
             mod_id: mod_id_u64,
             file_id: file_id_u64,
-            version: None,
+            version: file_version,
             display_name,
-            file_name: None,
+            file_name: file_variant_name.or(file_name_clean),
             installed_at: now_secs(),
         };
         write_meta(&mod_path, &meta).ok();
