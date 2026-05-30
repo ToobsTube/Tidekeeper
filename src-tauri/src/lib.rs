@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fs, io, path::{Path, PathBuf}, sync::Mutex};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_deep_link::DeepLinkExt;
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use sha2::{Digest, Sha256};
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 #[serde(rename_all = "camelCase")]
@@ -12,6 +14,10 @@ pub struct Config {
     pub setup_complete: Option<bool>,
     pub nexus_client_id: Option<String>,
     pub nexus_token: Option<String>,
+    pub nexus_refresh_token: Option<String>,
+    pub nexus_token_expiry: Option<u64>,
+    pub nexus_username: Option<String>,
+    pub nexus_is_premium: Option<bool>,
     pub nexus_api_key: Option<String>,
     pub profiles: Option<HashMap<String, Vec<String>>>,
     pub active_profile: Option<String>,
@@ -623,6 +629,79 @@ fn check_ue4ss(app: AppHandle) -> bool {
     inner.join("Binaries").join("Win64").join("ue4ss").join("UE4SS.dll").exists()
 }
 
+// ── Game detection ────────────────────────────────────────────────────────────
+
+// Searches Steam libraries for the Subnautica 2 install folder.
+// Returns the path to steamapps/common/Subnautica2 if found.
+#[cfg(windows)]
+fn find_subnautica2_install() -> Option<String> {
+    use winreg::{enums::HKEY_CURRENT_USER, RegKey};
+    let steam_path: String = RegKey::predef(HKEY_CURRENT_USER)
+        .open_subkey("Software\\Valve\\Steam").ok()?
+        .get_value("SteamPath").ok()?;
+    let steam_root = PathBuf::from(steam_path.replace('/', "\\"));
+
+    let check = |lib: &PathBuf| -> Option<String> {
+        let game = lib.join("steamapps").join("common").join("Subnautica2");
+        if game.is_dir() { Some(game.to_string_lossy().into_owned()) } else { None }
+    };
+
+    if let Some(p) = check(&steam_root) { return Some(p); }
+
+    // Check additional libraries listed in libraryfolders.vdf
+    let vdf = fs::read_to_string(
+        steam_root.join("steamapps").join("libraryfolders.vdf")
+    ).ok()?;
+
+    for line in vdf.lines() {
+        // VDF lines look like:  "path"   "F:\\SteamLibrary"
+        let tokens: Vec<&str> = line.trim().split('"').collect();
+        if let Some(&raw) = tokens.get(3) {
+            if raw.contains(":\\") || raw.starts_with('/') {
+                let lib = PathBuf::from(raw.replace("\\\\", "\\"));
+                if let Some(p) = check(&lib) { return Some(p); }
+            }
+        }
+    }
+    None
+}
+
+#[cfg(not(windows))]
+fn find_subnautica2_install() -> Option<String> { None }
+
+#[tauri::command]
+fn find_subnautica2() -> Option<String> {
+    find_subnautica2_install()
+}
+
+// Creates the UE4SS/Mods folder structure inside the given game folder and
+// returns the mods folder path. Accepts either the Steam install folder
+// (steamapps/common/Subnautica2) or the inner game folder directly.
+#[tauri::command]
+fn create_mod_structure(game_folder: String) -> Result<String, String> {
+    let base = PathBuf::from(&game_folder);
+
+    // Handle both folder levels users might select:
+    //   Steam install: steamapps/common/Subnautica2  → inner is base/Subnautica2
+    //   Inner folder:  .../Subnautica2/Subnautica2   → inner is base itself
+    let inner = if base.join("Subnautica2").join("Binaries").is_dir() {
+        base.join("Subnautica2")
+    } else if base.join("Binaries").is_dir() {
+        base.clone()
+    } else {
+        return Err(
+            "Subnautica 2 game files not found here. \
+             Select the folder named Subnautica2 inside your Steam library.".into()
+        );
+    };
+
+    let mods_path = inner
+        .join("Binaries").join("Win64")
+        .join("ue4ss").join("Mods");
+    fs::create_dir_all(&mods_path).map_err(|e| format!("Could not create mods folder: {}", e))?;
+    Ok(mods_path.to_string_lossy().into_owned())
+}
+
 // ── NXM protocol ─────────────────────────────────────────────────────────────
 
 async fn process_nxm(app: &AppHandle, nxm_url: String) -> Result<String, String> {
@@ -645,8 +724,8 @@ async fn process_nxm(app: &AppHandle, nxm_url: String) -> Result<String, String>
     }
 
     let config      = load_config(app).ok_or("No config — please complete setup first")?;
-    let api_key     = config.nexus_api_key.clone().ok_or("No Nexus API key configured")?;
     let mods_folder = config.mods_folder.clone().ok_or("No mods folder configured")?;
+    let (auth_header, auth_value) = get_nexus_auth(app).await?;
 
     let download_dir = config.download_dir
         .as_deref()
@@ -660,7 +739,7 @@ async fn process_nxm(app: &AppHandle, nxm_url: String) -> Result<String, String>
     );
     let links: Vec<DownloadLink> = client
         .get(&api_url)
-        .header("apikey", &api_key)
+        .header(auth_header.as_str(), auth_value.as_str())
         .header("Application-Name", "Tidekeeper")
         .header("Application-Version", "0.4.0")
         .send().await.map_err(|e| e.to_string())?
@@ -792,13 +871,12 @@ pub struct ModUpdateStatus {
 
 #[tauri::command]
 async fn get_nexus_mod_files(app: AppHandle, mod_id: u64) -> Result<Vec<NexusFileEntry>, String> {
-    let config = load_config(&app).ok_or("No config")?;
-    let api_key = config.nexus_api_key.ok_or("No Nexus API key configured")?;
+    let (auth_header, auth_value) = get_nexus_auth(&app).await?;
     let client = Client::new();
     let url = format!("https://api.nexusmods.com/v1/games/subnautica2/mods/{}/files.json", mod_id);
     let resp: NexusFilesResponse = client
         .get(&url)
-        .header("apikey", &api_key)
+        .header(auth_header.as_str(), auth_value.as_str())
         .header("Application-Name", "Tidekeeper")
         .header("Application-Version", "0.4.0")
         .send().await.map_err(|e| e.to_string())?
@@ -819,8 +897,8 @@ async fn get_nexus_mod_files(app: AppHandle, mod_id: u64) -> Result<Vec<NexusFil
 #[tauri::command]
 async fn install_nexus_mod(app: AppHandle, mod_id: u64, file_id: u64, version: Option<String>) -> Result<String, String> {
     let config = load_config(&app).ok_or("No config")?;
-    let api_key = config.nexus_api_key.ok_or("No Nexus API key configured")?;
     let mods_folder = config.mods_folder.ok_or("No mods folder configured")?;
+    let (auth_header, auth_value) = get_nexus_auth(&app).await?;
     let download_dir = config.download_dir
         .as_deref()
         .map(PathBuf::from)
@@ -834,7 +912,7 @@ async fn install_nexus_mod(app: AppHandle, mod_id: u64, file_id: u64, version: O
     );
     let links_resp = client
         .get(&links_url)
-        .header("apikey", &api_key)
+        .header(auth_header.as_str(), auth_value.as_str())
         .header("Application-Name", "Tidekeeper")
         .header("Application-Version", "0.4.0")
         .send().await.map_err(|e| e.to_string())?;
@@ -886,8 +964,11 @@ async fn install_nexus_mod(app: AppHandle, mod_id: u64, file_id: u64, version: O
 #[tauri::command]
 async fn check_mod_updates(app: AppHandle) -> Vec<ModUpdateStatus> {
     let Some(config) = load_config(&app) else { return vec![]; };
-    let Some(api_key) = config.nexus_api_key.clone() else { return vec![]; };
     let Some(mods_folder) = config.mods_folder.clone() else { return vec![]; };
+    let (auth_header, auth_value) = match get_nexus_auth(&app).await {
+        Ok(a)  => a,
+        Err(_) => return vec![],
+    };
 
     let mut nexus_mods: Vec<(String, PathBuf, ModMeta)> = Vec::new();
 
@@ -935,7 +1016,7 @@ async fn check_mod_updates(app: AppHandle) -> Vec<ModUpdateStatus> {
         let url = format!("https://api.nexusmods.com/v1/games/subnautica2/mods/{}.json", mod_id);
         let latest_version: Option<String> = async {
             let r = client.get(&url)
-                .header("apikey", &api_key)
+                .header(auth_header.as_str(), auth_value.as_str())
                 .header("Application-Name", "Tidekeeper")
                 .header("Application-Version", "0.4.0")
                 .send().await.ok()?;
@@ -1611,6 +1692,264 @@ fn get_ue4ss_log(app: AppHandle) -> Result<String, String> {
     Ok(lines[start..].join("\n"))
 }
 
+// ── OAuth 2.0 + PKCE ─────────────────────────────────────────────────────────
+
+const OAUTH_REDIRECT_URI: &str = "http://127.0.0.1:8089/callback";
+const OAUTH_AUTH_URL: &str     = "https://users.nexusmods.com/oauth/authorize";
+const OAUTH_TOKEN_URL: &str    = "https://users.nexusmods.com/oauth/token";
+
+fn generate_code_verifier() -> String {
+    use rand::RngCore;
+    let mut bytes = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    URL_SAFE_NO_PAD.encode(bytes)
+}
+
+fn generate_code_challenge(verifier: &str) -> String {
+    let hash = Sha256::digest(verifier.as_bytes());
+    URL_SAFE_NO_PAD.encode(hash)
+}
+
+fn generate_state() -> String {
+    use rand::RngCore;
+    let mut bytes = [0u8; 16];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    bytes.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+fn decode_jwt_payload(token: &str) -> Result<serde_json::Value, String> {
+    let part = token.split('.').nth(1).ok_or("Invalid JWT")?;
+    let bytes = URL_SAFE_NO_PAD.decode(part).map_err(|e| format!("JWT decode: {}", e))?;
+    serde_json::from_slice(&bytes).map_err(|e| format!("JWT parse: {}", e))
+}
+
+#[derive(Deserialize)]
+struct TokenResponse {
+    access_token: String,
+    refresh_token: String,
+}
+
+async fn exchange_oauth_code(code: &str, verifier: &str, client_id: &str) -> Result<TokenResponse, String> {
+    let params = [
+        ("grant_type",    "authorization_code"),
+        ("redirect_uri",  OAUTH_REDIRECT_URI),
+        ("client_id",     client_id),
+        ("code",          code),
+        ("code_verifier", verifier),
+    ];
+    let resp = Client::new()
+        .post(OAUTH_TOKEN_URL)
+        .form(&params)
+        .send().await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("Token exchange failed: {}", body));
+    }
+    resp.json().await.map_err(|e| format!("Token parse: {}", e))
+}
+
+async fn do_token_refresh(refresh: &str, client_id: &str) -> Result<TokenResponse, String> {
+    let params = [
+        ("grant_type",    "refresh_token"),
+        ("client_id",     client_id),
+        ("refresh_token", refresh),
+    ];
+    let resp = Client::new()
+        .post(OAUTH_TOKEN_URL)
+        .form(&params)
+        .send().await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err("Token refresh failed — please sign in again".into());
+    }
+    resp.json().await.map_err(|e| e.to_string())
+}
+
+// Returns (header_name, header_value) for Nexus API requests.
+// Uses OAuth Bearer token when available (refreshing if needed), falls back to API key.
+async fn get_nexus_auth(app: &AppHandle) -> Result<(String, String), String> {
+    let config = load_config(app).ok_or("No config")?;
+
+    if let (Some(token), Some(exp), Some(refresh), Some(client_id)) = (
+        config.nexus_token.clone(),
+        config.nexus_token_expiry,
+        config.nexus_refresh_token.clone(),
+        config.nexus_client_id.clone(),
+    ) {
+        if now_secs() < exp.saturating_sub(60) {
+            return Ok(("Authorization".into(), format!("Bearer {}", token)));
+        }
+        // Expired — try refresh
+        if let Ok(new_tokens) = do_token_refresh(&refresh, &client_id).await {
+            if let Ok(payload) = decode_jwt_payload(&new_tokens.access_token) {
+                let new_exp = payload["exp"].as_u64().unwrap_or(0);
+                if let Some(mut cfg) = load_config(app) {
+                    cfg.nexus_token         = Some(new_tokens.access_token.clone());
+                    cfg.nexus_refresh_token = Some(new_tokens.refresh_token);
+                    cfg.nexus_token_expiry  = Some(new_exp);
+                    cfg.nexus_username      = payload["user"]["username"].as_str().map(String::from);
+                    cfg.nexus_is_premium    = Some(
+                        payload["user"]["membership_roles"].as_array()
+                            .map(|r| r.iter().any(|v| matches!(v.as_str(), Some("premium") | Some("lifetimepremium"))))
+                            .unwrap_or(false)
+                    );
+                    let _ = save_config_inner(app, &cfg);
+                }
+                return Ok(("Authorization".into(), format!("Bearer {}", new_tokens.access_token)));
+            }
+        }
+        // Refresh failed — fall through to API key
+    }
+
+    config.nexus_api_key
+        .map(|k| ("apikey".into(), k))
+        .ok_or_else(|| "No Nexus authentication. Sign in with Nexus Mods or add an API key in Settings.".into())
+}
+
+async fn handle_oauth_callback(
+    listener: std::net::TcpListener,
+    expected_state: String,
+    code_verifier: String,
+    client_id: String,
+    app: AppHandle,
+) {
+    let cb = tauri::async_runtime::spawn_blocking(move || {
+        use std::io::{BufRead, BufReader, Write};
+        let (mut stream, _) = listener.accept().map_err(|e| e.to_string())?;
+        let mut reader = BufReader::new(&stream);
+        let mut line = String::new();
+        reader.read_line(&mut line).map_err(|e| e.to_string())?;
+
+        // "GET /callback?code=...&state=... HTTP/1.1"
+        let query = line.split_whitespace().nth(1)
+            .and_then(|p| p.split_once('?')).map(|(_, q)| q).unwrap_or("");
+
+        let mut code  = None;
+        let mut state = None;
+        for param in query.split('&') {
+            if let Some(v) = param.strip_prefix("code=")  { code  = Some(v.to_string()); }
+            if let Some(v) = param.strip_prefix("state=") { state = Some(v.to_string()); }
+        }
+
+        let html = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n\
+            <html><head><title>Tidekeeper</title></head>\
+            <body style='font-family:sans-serif;text-align:center;padding:60px;background:#0d1117;color:#e0e0e0'>\
+            <h2 style='color:#00d4ff'>\u{2713} Signed in! You can close this tab.</h2>\
+            <p>Return to Tidekeeper to continue.</p>\
+            </body></html>";
+        let _ = stream.write_all(html.as_bytes());
+
+        match (code, state) {
+            (Some(c), Some(s)) => Ok((c, s)),
+            _ => Err("OAuth callback missing code or state".to_string()),
+        }
+    }).await;
+
+    let (code, state) = match cb {
+        Ok(Ok(pair)) => pair,
+        Ok(Err(e))   => { let _ = app.emit("nexus-oauth-error", e); return; }
+        Err(e)       => { let _ = app.emit("nexus-oauth-error", e.to_string()); return; }
+    };
+
+    if state != expected_state {
+        let _ = app.emit("nexus-oauth-error", "Authentication failed (state mismatch)");
+        return;
+    }
+
+    let tokens = match exchange_oauth_code(&code, &code_verifier, &client_id).await {
+        Ok(t)  => t,
+        Err(e) => { let _ = app.emit("nexus-oauth-error", e); return; }
+    };
+
+    let payload = match decode_jwt_payload(&tokens.access_token) {
+        Ok(p)  => p,
+        Err(e) => { let _ = app.emit("nexus-oauth-error", e); return; }
+    };
+
+    let username   = payload["user"]["username"].as_str().unwrap_or("").to_string();
+    let is_premium = payload["user"]["membership_roles"].as_array()
+        .map(|r| r.iter().any(|v| matches!(v.as_str(), Some("premium") | Some("lifetimepremium"))))
+        .unwrap_or(false);
+    let exp = payload["exp"].as_u64().unwrap_or(0);
+
+    if let Some(mut cfg) = load_config(&app) {
+        cfg.nexus_token         = Some(tokens.access_token);
+        cfg.nexus_refresh_token = Some(tokens.refresh_token);
+        cfg.nexus_token_expiry  = Some(exp);
+        cfg.nexus_username      = Some(username.clone());
+        cfg.nexus_is_premium    = Some(is_premium);
+        let _ = save_config_inner(&app, &cfg);
+    }
+
+    write_log(&app, "INFO", &format!("Nexus OAuth sign-in: {}", username));
+    let _ = app.emit("nexus-oauth-complete", serde_json::json!({
+        "username":  username,
+        "isPremium": is_premium,
+    }));
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthStatus {
+    pub signed_in:  bool,
+    pub username:   Option<String>,
+    pub is_premium: bool,
+}
+
+#[tauri::command]
+fn nexus_get_auth_status(app: AppHandle) -> AuthStatus {
+    match load_config(&app) {
+        Some(cfg) if cfg.nexus_token.is_some() => AuthStatus {
+            signed_in:  true,
+            username:   cfg.nexus_username,
+            is_premium: cfg.nexus_is_premium.unwrap_or(false),
+        },
+        _ => AuthStatus { signed_in: false, username: None, is_premium: false },
+    }
+}
+
+// Starts the OAuth flow. Binds the local callback server, then returns the
+// authorize URL for the frontend to open in the browser.
+#[tauri::command]
+async fn nexus_oauth_login(app: AppHandle) -> Result<String, String> {
+    let config    = load_config(&app).ok_or("No config")?;
+    let client_id = config.nexus_client_id.unwrap_or_else(|| "public_test".into());
+
+    let verifier  = generate_code_verifier();
+    let challenge = generate_code_challenge(&verifier);
+    let state     = generate_state();
+
+    // Bind BEFORE returning the URL so we're listening when the browser redirects back.
+    let listener = std::net::TcpListener::bind("127.0.0.1:8089")
+        .map_err(|e| format!("Could not start local auth server on port 8089: {}", e))?;
+
+    let redirect_encoded = "http%3A%2F%2F127.0.0.1%3A8089%2Fcallback";
+    let auth_url = format!(
+        "{}?client_id={}&response_type=code&scope=&redirect_uri={}&state={}&code_challenge_method=S256&code_challenge={}",
+        OAUTH_AUTH_URL, client_id, redirect_encoded, state, challenge
+    );
+
+    let app_clone = app.clone();
+    tauri::async_runtime::spawn(async move {
+        handle_oauth_callback(listener, state, verifier, client_id, app_clone).await;
+    });
+
+    Ok(auth_url)
+}
+
+#[tauri::command]
+fn nexus_oauth_logout(app: AppHandle) -> Result<(), String> {
+    if let Some(mut cfg) = load_config(&app) {
+        cfg.nexus_token         = None;
+        cfg.nexus_refresh_token = None;
+        cfg.nexus_token_expiry  = None;
+        cfg.nexus_username      = None;
+        cfg.nexus_is_premium    = None;
+        save_config_inner(&app, &cfg)?;
+    }
+    write_log(&app, "INFO", "Nexus OAuth signed out");
+    Ok(())
+}
+
 // ── App updater ──────────────────────────────────────────────────────────────
 
 #[derive(Serialize)]
@@ -1713,6 +2052,8 @@ pub fn run() {
             get_config,
             save_config,
             validate_folder,
+            find_subnautica2,
+            create_mod_structure,
             scan_mods,
             toggle_mod,
             uninstall_mod,
@@ -1732,6 +2073,9 @@ pub fn run() {
             export_modpack,
             peek_modpack,
             install_modpack,
+            nexus_get_auth_status,
+            nexus_oauth_login,
+            nexus_oauth_logout,
             validate_nexus_key,
             get_nexus_mod_files,
             install_nexus_mod,

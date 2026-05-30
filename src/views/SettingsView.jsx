@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { getVersion } from '@tauri-apps/api/app';
@@ -15,8 +16,45 @@ export default function SettingsView({ config, onConfigChange, updateInfo, onRec
   const [appVersion, setAppVersion]   = useState('');
   const [installing, setInstalling]   = useState(false);
   const [accent, setAccent]           = useState(() => localStorage.getItem('tk-accent') ?? '#00d4ff');
+  const [authStatus, setAuthStatus]   = useState({ signedIn: false, username: null, isPremium: false });
+  const [signingIn, setSigningIn]     = useState(false);
+  const [oauthError, setOauthError]   = useState(null);
 
   useState(() => { getVersion().then(v => setAppVersion(v)).catch(() => {}); });
+
+  useEffect(() => {
+    invoke('nexus_get_auth_status').then(setAuthStatus).catch(() => {});
+
+    let unlisten1, unlisten2;
+    listen('nexus-oauth-complete', e => {
+      setAuthStatus({ signedIn: true, username: e.payload.username, isPremium: e.payload.isPremium });
+      setSigningIn(false);
+      setOauthError(null);
+    }).then(fn => { unlisten1 = fn; });
+    listen('nexus-oauth-error', e => {
+      setOauthError(typeof e.payload === 'string' ? e.payload : 'Sign-in failed — please try again.');
+      setSigningIn(false);
+    }).then(fn => { unlisten2 = fn; });
+
+    return () => { unlisten1?.(); unlisten2?.(); };
+  }, []);
+
+  async function doSignIn() {
+    setSigningIn(true);
+    setOauthError(null);
+    try {
+      const url = await invoke('nexus_oauth_login');
+      await openUrl(url);
+    } catch (e) {
+      setOauthError(String(e));
+      setSigningIn(false);
+    }
+  }
+
+  async function doSignOut() {
+    await invoke('nexus_oauth_logout').catch(() => {});
+    setAuthStatus({ signedIn: false, username: null, isPremium: false });
+  }
 
   function pickTheme(color) {
     setAccent(color);
@@ -147,23 +185,32 @@ export default function SettingsView({ config, onConfigChange, updateInfo, onRec
         {/* Nexus Account */}
         <section className="settings-section">
           <h3>Nexus Account</h3>
-          <p className="settings-hint">
-            Sign in with your Nexus Mods account to install mods without needing to manage an API key manually.
-          </p>
-          <div className="nexus-login-box">
-            <button className="btn-ghost sm" disabled style={{opacity:0.45, cursor:'not-allowed'}}>
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/>
-              </svg>
-              Sign in with Nexus Mods
-            </button>
-            <span className="nexus-login-pending">
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{flexShrink:0}}>
-                <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
-              </svg>
-              Waiting for Nexus approval — coming soon
-            </span>
-          </div>
+          {authStatus.signedIn ? (
+            <>
+              <div style={{display:'flex', alignItems:'center', gap:'8px', marginBottom:'10px', flexWrap:'wrap'}}>
+                <span style={{fontSize:'13px', color:'var(--text)'}}>
+                  Signed in as <strong>{authStatus.username}</strong>
+                </span>
+                {authStatus.isPremium && (
+                  <span style={{
+                    fontSize:'10px', fontWeight:700, letterSpacing:'0.05em',
+                    padding:'2px 6px', borderRadius:'4px',
+                    background:'var(--accent)', color:'#000',
+                  }}>PREMIUM</span>
+                )}
+              </div>
+              <div className="settings-row">
+                <button className="btn-ghost sm" onClick={doSignOut}>Sign out</button>
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="settings-hint">
+                One-click Nexus sign-in is coming in a future update. For now, use your
+                personal API key below to browse and install mods.
+              </p>
+            </>
+          )}
         </section>
 
         {/* Mods Folder */}
