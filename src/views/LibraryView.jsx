@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -58,6 +59,13 @@ export default function LibraryView({ config, onConfigChange }) {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  // Auto-refresh when an NXM download completes so new badges appear immediately
+  useEffect(() => {
+    let unlisten;
+    listen('nxm-installed', () => load()).then(fn => { unlisten = fn; });
+    return () => { unlisten?.(); };
+  }, [load]);
 
   // File drop via Tauri window events
   useEffect(() => {
@@ -472,7 +480,12 @@ export default function LibraryView({ config, onConfigChange }) {
             const upd = updateStatuses[mod.path];
             return (
               <div key={mod.path} className="mod-row">
-                <span className={`mod-row-name${mod.enabled ? '' : ' disabled'}`}>{mod.name}</span>
+                <span className={`mod-row-name${mod.enabled ? '' : ' disabled'}`}>
+                  {mod.meta?.displayName ?? mod.name}
+                  {mod.meta?.displayName && mod.meta.displayName !== mod.name && (
+                    <span className="mod-row-foldername">{mod.name}</span>
+                  )}
+                </span>
                 {mod.modType === 'pak' && <span className="mod-type-badge">PAK</span>}
                 {mod.meta?.source === 'nexus' && (
                   mod.meta?.modId
@@ -483,6 +496,7 @@ export default function LibraryView({ config, onConfigChange }) {
                       >Nexus ↗</button>
                     : <span className="mod-source-badge">Nexus</span>
                 )}
+                {mod.meta?.fileName && <span className="mod-variant-badge" title={mod.meta.fileName}>{mod.meta.fileName}</span>}
                 {mod.meta?.version && <span className="mod-version-badge">v{mod.meta.version}</span>}
                 {upd?.hasUpdate && (
                   <span className="mod-update-badge" title={`Update available: v${upd.latestVersion}`}>

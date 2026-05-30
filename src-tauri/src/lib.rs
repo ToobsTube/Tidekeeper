@@ -31,6 +31,8 @@ pub struct ModMeta {
     pub mod_id: Option<u64>,
     pub file_id: Option<u64>,
     pub version: Option<String>,
+    pub display_name: Option<String>,
+    pub file_name: Option<String>,
     pub installed_at: u64,
 }
 
@@ -52,6 +54,7 @@ pub struct ZipInfo {
     pub suggested_name: String,
     pub install_type: String,  // "game_relative" | "pak" | "script"
     pub needs_name_prompt: bool,
+    pub nexus_mod_id: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -377,6 +380,14 @@ fn derive_inner_game_folder(mods_folder: &str) -> Result<PathBuf, String> {
         .ok_or_else(|| "Cannot derive game folder from mods path — verify your mods folder setting".to_string())
 }
 
+// Nexus download filenames: {file-name}-{modId}-{version}-{timestamp}
+// The modId is the first all-numeric hyphen-separated segment.
+fn extract_nexus_mod_id(zip_stem: &str) -> Option<u64> {
+    zip_stem.split('-')
+        .find(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit()))
+        .and_then(|s| s.parse().ok())
+}
+
 fn analyze_zip(data: &[u8], zip_stem: &str) -> Result<ZipInfo, String> {
     let cursor = io::Cursor::new(data);
     let mut archive = zip::ZipArchive::new(cursor).map_err(|e| e.to_string())?;
@@ -430,11 +441,14 @@ fn analyze_zip(data: &[u8], zip_stem: &str) -> Result<ZipInfo, String> {
         }
     }
 
+    let nexus_mod_id = extract_nexus_mod_id(zip_stem);
+
     if is_ue4ss {
         return Ok(ZipInfo {
             suggested_name: "UE4SS".into(),
             install_type: "ue4ss".into(),
             needs_name_prompt: false,
+            nexus_mod_id: None,
         });
     }
 
@@ -445,28 +459,29 @@ fn analyze_zip(data: &[u8], zip_stem: &str) -> Result<ZipInfo, String> {
             suggested_name: embedded_mod_name.unwrap_or_else(|| zip_stem.to_string()),
             install_type: "game_relative".into(),
             needs_name_prompt: false,
+            nexus_mod_id,
         })
     } else if root_lower == "logicmods" {
-        // Prompt only if we couldn't find a file stem (extremely rare)
         let found = first_pak_stem.is_some();
         Ok(ZipInfo {
             suggested_name: first_pak_stem.unwrap_or_else(|| zip_stem.to_string()),
             install_type: "pak".into(),
             needs_name_prompt: !found,
+            nexus_mod_id,
         })
     } else if has_pak {
-        // Root dir IS the mod name
         Ok(ZipInfo {
             suggested_name: first_root.clone().unwrap_or_else(|| zip_stem.to_string()),
             install_type: "pak".into(),
             needs_name_prompt: first_root.is_none(),
+            nexus_mod_id,
         })
     } else {
-        // Root dir IS the mod name
         Ok(ZipInfo {
             suggested_name: first_root.clone().unwrap_or_else(|| zip_stem.to_string()),
             install_type: "script".into(),
             needs_name_prompt: first_root.is_none(),
+            nexus_mod_id,
         })
     }
 }
@@ -562,13 +577,36 @@ fn install_zip_bytes(data: Vec<u8>, mods_folder: &str, zip_stem: &str, mod_name:
 }
 
 #[tauri::command]
-fn peek_zip_name(zip_path: String) -> Result<ZipInfo, String> {
+async fn peek_zip_name(app: AppHandle, zip_path: String) -> Result<ZipInfo, String> {
     let data = archive_to_zip_bytes(&zip_path)?;
     let zip_stem = PathBuf::from(&zip_path)
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "mod".into());
-    analyze_zip(&data, &zip_stem)
+    let mut info = analyze_zip(&data, &zip_stem)?;
+
+    // If we detected a Nexus mod ID, resolve the display name from the API
+    if let Some(mod_id) = info.nexus_mod_id {
+        if let Ok((auth_header, auth_value)) = get_nexus_auth(&app).await {
+            let client = Client::new();
+            let url = format!("https://api.nexusmods.com/v1/games/subnautica2/mods/{}.json", mod_id);
+            if let Ok(resp) = client.get(&url)
+                .header(auth_header.as_str(), auth_value.as_str())
+                .header("Application-Name", "Tidekeeper")
+                .header("Application-Version", "0.5.1")
+                .send().await
+            {
+                if let Ok(json) = resp.json::<serde_json::Value>().await {
+                    if let Some(name) = json.get("name").and_then(|v| v.as_str()) {
+                        info.suggested_name = name.to_string();
+                        info.needs_name_prompt = false;
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(info)
 }
 
 #[tauri::command]
@@ -580,12 +618,18 @@ fn install_from_zip(app: AppHandle, zip_path: String, mod_name: String) -> Resul
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "mod".into());
-    let install_type = analyze_zip(&data, &zip_stem).map(|i| i.install_type).unwrap_or_default();
+    let zip_info = analyze_zip(&data, &zip_stem).ok();
+    let install_type = zip_info.as_ref().map(|i| i.install_type.clone()).unwrap_or_default();
+    let nexus_mod_id = zip_info.and_then(|i| i.nexus_mod_id);
     match install_zip_bytes(data, &mods_folder, &zip_stem, mod_name.trim()) {
         Ok(name) => {
             write_log(&app, "INFO", &format!("Installed: {}", name));
             if let Some(mod_path) = mod_install_path(&install_type, &mods_folder, &name) {
-                let meta = ModMeta { source: "manual".into(), installed_at: now_secs(), ..Default::default() };
+                let meta = if let Some(mid) = nexus_mod_id {
+                    ModMeta { source: "nexus".into(), mod_id: Some(mid), installed_at: now_secs(), ..Default::default() }
+                } else {
+                    ModMeta { source: "manual".into(), installed_at: now_secs(), ..Default::default() }
+                };
                 write_meta(&mod_path, &meta).ok();
             }
             Ok(name)
@@ -775,12 +819,30 @@ async fn process_nxm(app: &AppHandle, nxm_url: String) -> Result<String, String>
     // Write nexus source metadata
     let mod_id_u64: Option<u64> = mod_id.parse().ok();
     let file_id_u64: Option<u64> = file_id.parse().ok();
+
+    // Fetch the Nexus display name for the library
+    let display_name: Option<String> = if let Some(mid) = mod_id_u64 {
+        let url = format!("https://api.nexusmods.com/v1/games/subnautica2/mods/{}.json", mid);
+        match client.get(&url)
+            .header(auth_header.as_str(), auth_value.as_str())
+            .header("Application-Name", "Tidekeeper")
+            .header("Application-Version", "0.5.1")
+            .send().await
+        {
+            Ok(resp) => resp.json::<serde_json::Value>().await.ok()
+                .and_then(|j| j.get("name").and_then(|v| v.as_str()).map(str::to_string)),
+            Err(_) => None,
+        }
+    } else { None };
+
     if let Some(mod_path) = mod_install_path(&info.install_type, &mods_folder, &installed) {
         let meta = ModMeta {
             source: "nexus".into(),
             mod_id: mod_id_u64,
             file_id: file_id_u64,
             version: None,
+            display_name,
+            file_name: None,
             installed_at: now_secs(),
         };
         write_meta(&mod_path, &meta).ok();
@@ -895,7 +957,7 @@ async fn get_nexus_mod_files(app: AppHandle, mod_id: u64) -> Result<Vec<NexusFil
 }
 
 #[tauri::command]
-async fn install_nexus_mod(app: AppHandle, mod_id: u64, file_id: u64, version: Option<String>) -> Result<String, String> {
+async fn install_nexus_mod(app: AppHandle, mod_id: u64, file_id: u64, version: Option<String>, file_name: Option<String>) -> Result<String, String> {
     let config = load_config(&app).ok_or("No config")?;
     let mods_folder = config.mods_folder.ok_or("No mods folder configured")?;
     let (auth_header, auth_value) = get_nexus_auth(&app).await?;
@@ -944,7 +1006,8 @@ async fn install_nexus_mod(app: AppHandle, mod_id: u64, file_id: u64, version: O
         .unwrap_or_else(|| "mod".into());
     let zip_bytes = archive_to_zip_bytes(&saved_path.to_string_lossy())?;
     let info = analyze_zip(&zip_bytes, &zip_stem)?;
-    let installed = install_zip_bytes(zip_bytes, &mods_folder, &zip_stem, &info.suggested_name)?;
+    let folder_name = file_name.as_deref().unwrap_or(&info.suggested_name);
+    let installed = install_zip_bytes(zip_bytes, &mods_folder, &zip_stem, folder_name)?;
 
     if let Some(mod_path) = mod_install_path(&info.install_type, &mods_folder, &installed) {
         let meta = ModMeta {
@@ -952,6 +1015,8 @@ async fn install_nexus_mod(app: AppHandle, mod_id: u64, file_id: u64, version: O
             mod_id: Some(mod_id),
             file_id: Some(file_id),
             version: version.clone(),
+            display_name: None,
+            file_name,
             installed_at: now_secs(),
         };
         write_meta(&mod_path, &meta).ok();

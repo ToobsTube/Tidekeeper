@@ -27,6 +27,48 @@ function Skeletons() {
   );
 }
 
+function DetailModal({ mod, onClose, onInstall }) {
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal modal-wide" onClick={e => e.stopPropagation()}>
+        {mod.pictureUrl && (
+          <img
+            src={mod.pictureUrl} alt=""
+            style={{ width:'100%', height:'180px', objectFit:'cover', borderRadius:'10px 10px 0 0', display:'block', flexShrink:0 }}
+            onError={e => { e.target.style.display = 'none'; }}
+          />
+        )}
+        <div style={{ padding:'20px', display:'flex', flexDirection:'column', gap:'10px' }}>
+          <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap:'8px' }}>
+            <div>
+              <div className="modal-title">{mod.name}</div>
+              <div style={{ fontSize:'12px', color:'var(--text3)', marginTop:'2px' }}>{mod.author}</div>
+            </div>
+            <button className="modal-close" onClick={onClose}>✕</button>
+          </div>
+          <div style={{ display:'flex', gap:'16px', fontSize:'11px', color:'var(--text3)' }}>
+            <span>⬇ {fmtNum(mod.downloadCount)} downloads</span>
+            <span>♥ {fmtNum(mod.endorsementCount)} endorsements</span>
+          </div>
+          {mod.summary && (
+            <p style={{ fontSize:'13px', color:'var(--text2)', lineHeight:'1.6', margin:0 }}>
+              {mod.summary}
+            </p>
+          )}
+          <div style={{ display:'flex', gap:'8px', justifyContent:'flex-end', marginTop:'4px' }}>
+            <button className="btn-ghost sm" onClick={() => openUrl(`https://www.nexusmods.com/subnautica2/mods/${mod.modId}`)}>
+              Open on Nexus
+            </button>
+            <button className="btn-install" onClick={() => { onClose(); onInstall(mod); }}>
+              Install
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function NonPremiumModal({ mod, onClose }) {
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -72,7 +114,7 @@ function InstallModal({ mod, onClose, onInstalled }) {
     setInstalling(file.fileId);
     setError(null);
     try {
-      const name = await invoke('install_nexus_mod', { modId: mod.modId, fileId: file.fileId, version: file.version ?? null });
+      const name = await invoke('install_nexus_mod', { modId: mod.modId, fileId: file.fileId, version: file.version ?? null, fileName: file.name ?? null });
       setDone(name || file.name);
       onInstalled();
     } catch (e) {
@@ -136,7 +178,8 @@ export default function DiscoverView({ config, onTabChange, isPremium }) {
   const [loading, setLoading]   = useState(false);
   const [error, setError]       = useState(null);
   const [search, setSearch]     = useState('');
-  const [selected, setSelected] = useState(null);
+  const [selected, setSelected]   = useState(null);
+  const [detailMod, setDetailMod] = useState(null);
   const deferred = useDeferredValue(search);
 
   const hasApiKey = !!config?.nexusApiKey;
@@ -294,7 +337,7 @@ export default function DiscoverView({ config, onTabChange, isPremium }) {
           <>
         <div className="mods-grid">
             {visible.map(mod => (
-              <div key={mod.modId} className="mod-card">
+              <div key={mod.modId} className="mod-card" style={{cursor:'pointer'}} onClick={() => setDetailMod(mod)}>
                 {mod.pictureUrl
                   ? <img className="mod-card-img" src={mod.pictureUrl} alt="" loading="lazy" onError={e => { e.target.style.display='none'; }} />
                   : <div className="mod-card-placeholder">◈</div>
@@ -313,14 +356,14 @@ export default function DiscoverView({ config, onTabChange, isPremium }) {
                     </svg>
                     {fmtNum(mod.downloadCount)}
                   </span>
-                  <button className="btn-ghost xs" onClick={() => openUrl(`https://www.nexusmods.com/subnautica2/mods/${mod.modId}`)}>
+                  <button className="btn-ghost xs" onClick={e => { e.stopPropagation(); openUrl(`https://www.nexusmods.com/subnautica2/mods/${mod.modId}`); }}>
                     <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
                       <polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
                     </svg>
                     Nexus
                   </button>
-                  <button className="btn-install" onClick={() => setSelected(mod)}>Install</button>
+                  <button className="btn-install" onClick={e => { e.stopPropagation(); setSelected(mod); }}>Install</button>
                 </div>
               </div>
             ))}
@@ -331,6 +374,14 @@ export default function DiscoverView({ config, onTabChange, isPremium }) {
         </>
         )}
       </div>
+
+      {detailMod && (
+        <DetailModal
+          mod={detailMod}
+          onClose={() => setDetailMod(null)}
+          onInstall={mod => setSelected(mod)}
+        />
+      )}
 
       {selected && isPremium && (
         <InstallModal

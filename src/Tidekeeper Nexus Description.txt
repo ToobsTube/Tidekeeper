@@ -1,0 +1,39 @@
+Tidekeeper is a mod manager built specifically for Subnautica 2. It handles installation, updates, and organization so you can spend less time managing files and more time playing.
+
+[size=4][b]Getting Started[/b][/size]
+
+When you launch Tidekeeper for the first time it will automatically detect your Subnautica 2 Steam installation and set up the required folder structure. It will also guide you through installing UE4SS if you haven't already.
+
+[size=4][b]Features[/b][/size]
+
+[list]
+[*][b]Mod Manager Download[/b] — install mods directly from Nexus using the Mod Manager Download button
+[*][b]ZIP install[/b] — drag and drop or browse to a ZIP, 7z, or RAR archive to install manually
+[*][b]Enable / disable mods[/b] — toggle any mod on or off without uninstalling it
+[*][b]One-click game launch[/b] — start Subnautica 2 directly from the app without switching back to Steam
+[*][b]UE4SS install[/b] — download and install UE4SS automatically from inside the app
+[*][b]Update checking[/b] — see which of your installed Nexus mods have newer versions available
+[*][b]Mod profiles[/b] — save and switch between different mod load-outs
+[*][b]Mod packs[/b] — export your full mod list as a .tkpack file and share it, or import one from someone else
+[*][b]Diagnostics[/b] — built-in checks and log viewer to help troubleshoot problems
+[*][b]PAK and script mod support[/b] — manages both UE4SS script mods and pak/blueprint mods
+[/list]
+
+[size=4][b]Requirements[/b][/size]
+
+[list]
+[*]Subnautica 2 (Steam)
+[*]UE4SS — required for script mods only. Tidekeeper will install it for you. PAK and blueprint mods work without it.
+[/list]
+
+[size=4][b]Coming Soon[/b][/size]
+
+[list]
+[*]Nexus account sign-in — one-click login without needing an API key
+[*]Thunderstore support
+[/list]
+
+[size=4][b]Source & Feedback[/b][/size]
+
+Tidekeeper is open source. Bug reports and feature requests are welcome on GitHub.
+https://github.com/ToobsTube/Tidekeeper
