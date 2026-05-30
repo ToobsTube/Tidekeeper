@@ -8,16 +8,21 @@ Browse, install, and manage mods from Nexus Mods directly inside the app. Suppor
 
 ## Features
 
-- Browse and search Nexus Mods from within the app
+- Browse and search Nexus Mods from within the app — click any mod card to see details, download count, endorsements, and summary before installing
 - Install mods via **Mod Manager Download** (NXM protocol) — click the button on Nexus and Tidekeeper handles the rest
 - Direct install from the app for Nexus Premium members
 - Enable and disable mods without uninstalling them
+- **Library shows proper Nexus mod names** — mods installed from Nexus display their actual mod page name alongside the folder name, with variant labels (e.g. "Lite" / "Plus") so you always know what you have installed
+- **Variant conflict detection** — warns you when two files from the same mod are both enabled at once, with the affected rows highlighted
+- **Clickable Nexus badge** — jump straight to a mod's Nexus page from the Library
 - **Mod profiles** — save and switch between different mod loadouts
 - **Mod pack export/import** (.tkpack) — bundle your entire mod list and share it with friends. When importing, choose to save it as a profile so you can switch between your setup and a friend's with one click
 - **Updates tab** — see which of your installed Nexus mods have newer versions available and jump straight to the files page
+- **Launch Subnautica 2** directly from the app
 - Supports ZIP, 7z, and RAR archives
 - App auto-updater — stay up to date automatically
 - Theme picker — choose from preset accent colors or pick a custom one
+- Diagnostics tool — scan for common issues, view Tidekeeper and UE4SS logs, export a report
 
 ---
 
@@ -94,14 +99,17 @@ This is useful for multiplayer — everyone can run the same mods without manual
 ## Roadmap
 
 - [x] Browse and install mods from Nexus Mods (Discover tab)
+- [x] Mod detail view — click any mod card to see full info before installing
 - [x] Mod Manager Download / NXM protocol support
 - [x] Mod pack export and import (.tkpack) for sharing with friends
 - [x] App auto-updater
-- [x] Installed mod tracking with source metadata and version info
+- [x] Installed mod tracking with source metadata, display names, variant labels, and version info
 - [x] Mod update checker
 - [x] Theme picker (preset colors + custom)
 - [x] Updates tab — dedicated view for checking and acting on available mod updates
 - [x] Profile creation on mod pack import — switch between your setup and a friend's in one click
+- [x] Variant conflict detection — warns when two files from the same mod are both enabled
+- [x] Launch Subnautica 2 from the app
 - [ ] Appear in the Nexus Mods mod manager dropdown (NXM registration pending approval)
 - [ ] Nexus account sign-in (replaces manual API key — pending Nexus approval)
 - [ ] Support for multiple game installations (e.g. experimental vs live branch)
