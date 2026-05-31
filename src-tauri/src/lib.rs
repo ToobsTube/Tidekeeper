@@ -1165,6 +1165,8 @@ pub struct ModUpdateStatus {
     pub installed_version: Option<String>,
     pub latest_version: Option<String>,
     pub mod_id: Option<u64>,
+    pub latest_file_id: Option<u64>,
+    pub latest_file_name: Option<String>,
 }
 
 #[tauri::command]
@@ -1243,9 +1245,62 @@ async fn install_nexus_mod(app: AppHandle, mod_id: u64, file_id: u64, version: O
     let zip_bytes = archive_to_zip_bytes(&saved_path.to_string_lossy())?;
     let info = analyze_zip(&zip_bytes, &zip_stem)?;
     let folder_name = file_name.as_deref().unwrap_or(&info.suggested_name);
+
+    // Backup existing install if this is an update
+    let expected_mod_path = mod_install_path(&info.install_type, &mods_folder, folder_name);
+    let is_update = expected_mod_path.as_ref().map(|p| p.exists()).unwrap_or(false);
+    let mut backup_path_str: Option<String> = None;
+    let mut old_config_rel: Vec<String> = vec![];
+
+    if is_update {
+        if let Some(ref old_path) = expected_mod_path {
+            let old_meta = read_meta(old_path);
+            let old_version = old_meta.as_ref()
+                .and_then(|m| m.version.as_deref())
+                .unwrap_or("unknown")
+                .replace(['/', '\\', ':'], "_");
+            let folder_stem = old_path.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "mod".into());
+            let backup_name = format!("{}_{}", folder_stem, old_version);
+            let backup_dir = app.path().app_data_dir().expect("app data dir")
+                .join("backups").join(&backup_name);
+            if backup_dir.exists() { let _ = fs::remove_dir_all(&backup_dir); }
+            copy_dir_all(old_path, &backup_dir).map_err(|e| e.to_string())?;
+            backup_path_str = Some(backup_dir.to_string_lossy().into_owned());
+            old_config_rel = find_config_files(old_path)
+                .into_iter()
+                .filter_map(|abs| {
+                    PathBuf::from(&abs).strip_prefix(old_path).ok()
+                        .map(|rel| rel.to_string_lossy().into_owned())
+                })
+                .collect();
+            fs::remove_dir_all(old_path).map_err(|e| e.to_string())?;
+        }
+    }
+
     let installed = install_zip_bytes(zip_bytes, &mods_folder, &zip_stem, folder_name)?;
 
     if let Some(mod_path) = mod_install_path(&info.install_type, &mods_folder, &installed) {
+        if is_update {
+            if let Some(ref bp) = backup_path_str {
+                let backup_dir = PathBuf::from(bp);
+                for rel in &old_config_rel {
+                    let new_cfg = mod_path.join(Path::new(rel.as_str()));
+                    let old_cfg = backup_dir.join(Path::new(rel.as_str()));
+                    if new_cfg.exists() && old_cfg.exists() {
+                        let mut new_name = new_cfg.file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        new_name.push_str(".new");
+                        if let Some(parent) = new_cfg.parent() {
+                            let _ = fs::copy(&new_cfg, parent.join(&new_name));
+                        }
+                        let _ = fs::copy(&old_cfg, &new_cfg);
+                    }
+                }
+            }
+        }
         let meta = ModMeta {
             source: "nexus".into(),
             mod_id: Some(mod_id),
@@ -1255,7 +1310,7 @@ async fn install_nexus_mod(app: AppHandle, mod_id: u64, file_id: u64, version: O
             file_name,
             installed_at: now_secs(),
             installed_files: Some(collect_mod_files(&mod_path)),
-            backup_path: None,
+            backup_path: backup_path_str,
         };
         write_meta(&mod_path, &meta).ok();
     }
@@ -1330,6 +1385,37 @@ async fn check_mod_updates(app: AppHandle) -> Vec<ModUpdateStatus> {
             (Some(installed), Some(latest)) => installed != latest,
             _ => false,
         };
+
+        // For mods with updates, find the matching latest file_id
+        let (latest_file_id, latest_file_name) = if has_update {
+            let files_url = format!("https://api.nexusmods.com/v1/games/subnautica2/mods/{}/files.json", mod_id);
+            let files: Option<Vec<NexusApiFile>> = async {
+                let r = client.get(&files_url)
+                    .header(auth_header.as_str(), auth_value.as_str())
+                    .header("Application-Name", "Tidekeeper")
+                    .header("Application-Version", "0.5.4")
+                    .send().await.ok()?;
+                r.json::<NexusFilesResponse>().await.ok().map(|r| r.files)
+            }.await;
+            if let Some(files) = files {
+                let main_files: Vec<_> = files.into_iter()
+                    .filter(|f| f.category_id == Some(1))
+                    .collect();
+                // Try to match by installed file name, else pick first main file
+                let matched = meta.file_name.as_deref().and_then(|installed_name| {
+                    main_files.iter().find(|f| {
+                        f.name.as_deref().map(|n| n.eq_ignore_ascii_case(installed_name)).unwrap_or(false)
+                    })
+                }).or_else(|| main_files.first());
+                matched.map(|f| (Some(f.file_id), f.name.clone()))
+                    .unwrap_or((None, None))
+            } else {
+                (None, None)
+            }
+        } else {
+            (None, None)
+        };
+
         results.push(ModUpdateStatus {
             mod_name: name,
             mod_path: path.to_string_lossy().into_owned(),
@@ -1337,6 +1423,8 @@ async fn check_mod_updates(app: AppHandle) -> Vec<ModUpdateStatus> {
             installed_version: meta.version,
             latest_version,
             mod_id: Some(mod_id),
+            latest_file_id,
+            latest_file_name,
         });
     }
 

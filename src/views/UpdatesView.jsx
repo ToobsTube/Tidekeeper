@@ -6,8 +6,30 @@ export default function UpdatesView({ config, onTabChange }) {
   const [statuses, setStatuses] = useState(null);
   const [loading, setLoading]   = useState(false);
   const [error, setError]       = useState(null);
+  const [updating, setUpdating] = useState({}); // modPath → true while installing
 
-  const hasApiKey = !!config?.nexusApiKey;
+  const hasApiKey  = !!config?.nexusApiKey;
+  const isPremium  = !!config?.nexusIsPremium;
+
+  async function doDirectUpdate(s) {
+    if (!s.latestFileId) return;
+    setUpdating(prev => ({ ...prev, [s.modPath]: true }));
+    try {
+      await invoke('install_nexus_mod', {
+        modId: s.modId,
+        fileId: s.latestFileId,
+        version: s.latestVersion,
+        fileName: s.latestFileName,
+      });
+      // Refresh update list after install
+      const results = await invoke('check_mod_updates');
+      setStatuses(results);
+    } catch (e) {
+      alert(`Update failed: ${e}`);
+    } finally {
+      setUpdating(prev => ({ ...prev, [s.modPath]: false }));
+    }
+  }
 
   async function checkUpdates() {
     setLoading(true);
@@ -98,13 +120,23 @@ export default function UpdatesView({ config, onTabChange }) {
                   </svg>
                   <span className="update-v-new">{s.latestVersion ?? '?'}</span>
                 </div>
-                <button
-                  className="btn-primary sm"
-                  onClick={() => s.modId && openUrl(`https://www.nexusmods.com/subnautica2/mods/${s.modId}?tab=files`)}
-                  disabled={!s.modId}
-                >
-                  Download Update
-                </button>
+                {isPremium && s.latestFileId ? (
+                  <button
+                    className="btn-primary sm"
+                    onClick={() => doDirectUpdate(s)}
+                    disabled={!!updating[s.modPath]}
+                  >
+                    {updating[s.modPath] ? 'Updating…' : 'Update'}
+                  </button>
+                ) : (
+                  <button
+                    className="btn-ghost sm"
+                    onClick={() => s.modId && openUrl(`https://www.nexusmods.com/subnautica2/mods/${s.modId}?tab=files`)}
+                    disabled={!s.modId}
+                  >
+                    Download Update
+                  </button>
+                )}
               </div>
             ))}
 
