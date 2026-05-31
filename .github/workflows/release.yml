@@ -53,14 +53,25 @@ jobs:
           $version = "${{ github.ref_name }}".TrimStart('v')
           $tagName = "${{ github.ref_name }}"
           $base = "$env:GITHUB_WORKSPACE\src-tauri\target\release\bundle\nsis"
-          $nsisZip = "$base\Tidekeeper_${version}_x64-setup.nsis.zip"
-          $nsisSig = "$base\Tidekeeper_${version}_x64-setup.nsis.zip.sig"
 
-          gh release upload $tagName $nsisZip --clobber
-          gh release upload $tagName $nsisSig --clobber
+          Write-Host "=== NSIS bundle directory ==="
+          if (Test-Path $base) { Get-ChildItem $base | Select-Object Name } else { Write-Host "Directory not found: $base" }
+          Write-Host "=== End listing ==="
 
-          $sig = (Get-Content $nsisSig -Raw).Trim()
-          $url = "https://github.com/ToobsTube/Tidekeeper/releases/download/${tagName}/Tidekeeper_${version}_x64-setup.nsis.zip"
+          $nsisZipName = "Tidekeeper_${version}_x64-setup.nsis.zip"
+          $nsisSigName = "Tidekeeper_${version}_x64-setup.nsis.zip.sig"
+
+          if (-not (Test-Path "$base\$nsisZipName")) { Write-Error "NSIS zip not found"; exit 1 }
+
+          Copy-Item "$base\$nsisZipName" "$env:GITHUB_WORKSPACE\$nsisZipName"
+          Copy-Item "$base\$nsisSigName" "$env:GITHUB_WORKSPACE\$nsisSigName"
+
+          Set-Location $env:GITHUB_WORKSPACE
+          gh release upload $tagName $nsisZipName --clobber
+          gh release upload $tagName $nsisSigName --clobber
+
+          $sig = (Get-Content $nsisSigName -Raw).Trim()
+          $url = "https://github.com/ToobsTube/Tidekeeper/releases/download/${tagName}/${nsisZipName}"
 
           $json = [ordered]@{
             version  = $version
@@ -74,5 +85,5 @@ jobs:
             }
           } | ConvertTo-Json -Depth 5
 
-          $json | Out-File -FilePath "$env:GITHUB_WORKSPACE\latest.json" -Encoding utf8NoBOM
-          gh release upload $tagName "$env:GITHUB_WORKSPACE\latest.json" --clobber
+          $json | Out-File -FilePath "latest.json" -Encoding utf8NoBOM
+          gh release upload $tagName latest.json --clobber
