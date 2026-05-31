@@ -36,14 +36,28 @@ jobs:
 
       - name: Build Tauri app
         shell: pwsh
+        run: npm run tauri build
+
+      - name: Sign and package updater bundle
+        shell: pwsh
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
+          $version = "${{ github.ref_name }}".TrimStart('v')
+          $nsisExe = "src-tauri\target\release\bundle\nsis\Tidekeeper_${version}_x64-setup.exe"
+          $nsisZip = "src-tauri\target\release\bundle\nsis\Tidekeeper_${version}_x64-setup.nsis.zip"
+
           $keyPath = Join-Path $env:TEMP "tauri_signing.key"
           [System.IO.File]::WriteAllText($keyPath, $env:TAURI_SIGNING_PRIVATE_KEY)
-          $env:TAURI_SIGNING_PRIVATE_KEY = $keyPath
-          npm run tauri build
+
+          Compress-Archive -Path $nsisExe -DestinationPath $nsisZip -Force
+
+          if ($env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD) {
+            npx tauri signer sign -k $keyPath -p $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD $nsisZip
+          } else {
+            npx tauri signer sign -k $keyPath $nsisZip
+          }
 
       - name: Create release and upload assets
         shell: pwsh
