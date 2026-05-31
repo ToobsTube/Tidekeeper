@@ -10,14 +10,17 @@ Browse, install, and manage mods from Nexus Mods directly inside the app. Suppor
 
 - Browse and search Nexus Mods from within the app — click any mod card to see details, download count, endorsements, and summary before installing
 - Install mods via **Mod Manager Download** (NXM protocol) — click the button on Nexus and Tidekeeper handles the rest
-- Direct install from the app for Nexus Premium members
+- **One-click updates for Nexus Premium members** — update directly from the Updates tab without opening a browser
 - Enable and disable mods without uninstalling them
+- **Smart update backup** — when a mod is updated, the old version is automatically backed up. Your config settings are preserved, and a rollback button appears in the Library if anything breaks
+- **Config file access** — mods with config files show a ⚙ button in the Library that opens the file directly in your default text editor. After an update, a second button lets you compare your old settings against the new defaults
+- **File integrity check** — verify that all installed mod files are still in place with one click
 - **Library shows proper Nexus mod names** — mods installed from Nexus display their actual mod page name alongside the folder name, with variant labels (e.g. "Lite" / "Plus") so you always know what you have installed
 - **Variant conflict detection** — warns you when two files from the same mod are both enabled at once, with the affected rows highlighted
 - **Clickable Nexus badge** — jump straight to a mod's Nexus page from the Library
 - **Mod profiles** — save and switch between different mod loadouts
 - **Mod pack export/import** (.tkpack) — bundle your entire mod list and share it with friends. When importing, choose to save it as a profile so you can switch between your setup and a friend's with one click
-- **Updates tab** — see which of your installed Nexus mods have newer versions available and jump straight to the files page
+- **Updates tab** — see which of your installed Nexus mods have newer versions available. Premium members get a direct Update button; free members get a link to the Nexus files page
 - **Launch Subnautica 2** directly from the app
 - Supports ZIP, 7z, and RAR archives
 - App auto-updater — stay up to date automatically
@@ -29,7 +32,7 @@ Browse, install, and manage mods from Nexus Mods directly inside the app. Suppor
 ## Requirements
 
 - **Windows 10 or later** (64-bit)
-- **Subnautica 2** installed
+- **Subnautica 2** installed via Steam
 - **Nexus Mods account** with a Personal API Key (free tier works)
 - **7-Zip** installed at the default path (`C:\Program Files\7-Zip\`) — only required if you install mods packaged as `.rar` archives
 
@@ -37,7 +40,7 @@ Browse, install, and manage mods from Nexus Mods directly inside the app. Suppor
 
 ## Installation
 
-1. Download the latest `.msi` or `.exe` installer from the [Releases](https://github.com/ToobsTube/Tidekeeper/releases) page
+1. Download the latest installer from the [Releases](https://github.com/ToobsTube/Tidekeeper/releases) page
 2. Run the installer
 3. On first launch, point Tidekeeper to your UE4SS Mods folder
 
@@ -45,6 +48,8 @@ The UE4SS Mods folder is typically located at:
 ```
 C:\Program Files (x86)\Steam\steamapps\common\Subnautica2\Binaries\Win64\ue4ss\Mods
 ```
+
+> **Note on antivirus warnings:** A couple of scanners flag Tidekeeper because it is not yet code-signed. This is a false positive. The full source code is in this repository for anyone who wants to verify it. If Windows SmartScreen warns you on install, click "More info" → "Run anyway".
 
 ### Installing UE4SS
 
@@ -71,7 +76,7 @@ A Nexus API key lets Tidekeeper browse mods and check for updates on your behalf
 3. Choose a download speed — when your browser asks to open Tidekeeper, allow it
 4. Tidekeeper downloads and installs the mod automatically
 
-> Nexus Premium members can also install mods directly from the **Discover** tab inside the app without opening a browser.
+> Nexus Premium members can also install and update mods directly from the **Discover** and **Updates** tabs inside the app without opening a browser.
 
 ---
 
@@ -110,6 +115,10 @@ This is useful for multiplayer — everyone can run the same mods without manual
 - [x] Profile creation on mod pack import — switch between your setup and a friend's in one click
 - [x] Variant conflict detection — warns when two files from the same mod are both enabled
 - [x] Launch Subnautica 2 from the app
+- [x] One-click updates for Nexus Premium members
+- [x] Smart update backup and rollback
+- [x] Config file access — open mod config files directly from the Library
+- [x] File integrity verification — check that all installed mod files are still present
 - [ ] Appear in the Nexus Mods mod manager dropdown (NXM registration pending approval)
 - [ ] Nexus account sign-in (replaces manual API key — pending Nexus approval)
 - [ ] Support for multiple game installations (e.g. experimental vs live branch)
