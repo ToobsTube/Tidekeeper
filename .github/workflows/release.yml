@@ -40,6 +40,7 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Tidekeeper ${{ github.ref_name }}'
-          releaseBody: 'Download the .msi file below to install or update Tidekeeper.'
+          releaseBody: 'Download the .exe installer below to install or update Tidekeeper.'
           releaseDraft: false
           prerelease: false
+          updaterJsonPreferNsis: true
