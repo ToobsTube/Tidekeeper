@@ -44,3 +44,34 @@ jobs:
           releaseDraft: false
           prerelease: false
           updaterJsonPreferNsis: true
+
+      - name: Upload updater bundle and generate latest.json
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart('v')
+          $tagName = "${{ github.ref_name }}"
+          $nsisZip = "src-tauri/target/release/bundle/nsis/Tidekeeper_${version}_x64-setup.nsis.zip"
+          $nsisSig = "${nsisZip}.sig"
+
+          gh release upload $tagName $nsisZip --clobber
+          gh release upload $tagName $nsisSig --clobber
+
+          $sig = (Get-Content $nsisSig -Raw).Trim()
+          $url = "https://github.com/ToobsTube/Tidekeeper/releases/download/${tagName}/Tidekeeper_${version}_x64-setup.nsis.zip"
+
+          $json = [ordered]@{
+            version  = $version
+            notes    = ""
+            pub_date = (Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ")
+            platforms = [ordered]@{
+              "windows-x86_64" = [ordered]@{
+                signature = $sig
+                url       = $url
+              }
+            }
+          } | ConvertTo-Json -Depth 5
+
+          $json | Out-File -FilePath "latest.json" -Encoding utf8NoBOM
+          gh release upload $tagName latest.json --clobber
