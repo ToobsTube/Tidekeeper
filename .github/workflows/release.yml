@@ -31,47 +31,42 @@ jobs:
       - name: Install frontend deps
         run: npm ci
 
+      - name: Build frontend
+        run: npm run build
+
       - name: Build Tauri app
-        uses: tauri-apps/tauri-action@v0
+        shell: pwsh
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'Tidekeeper ${{ github.ref_name }}'
-          releaseBody: 'Download the .exe installer below to install or update Tidekeeper.'
-          releaseDraft: false
-          prerelease: false
-          updaterJsonPreferNsis: true
+        run: npm run tauri build
 
-      - name: Upload updater bundle and generate latest.json
+      - name: Create release and upload assets
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $version = "${{ github.ref_name }}".TrimStart('v')
           $tagName = "${{ github.ref_name }}"
-          $base = "$env:GITHUB_WORKSPACE\src-tauri\target\release\bundle\nsis"
+          $msiBundle = "src-tauri\target\release\bundle\msi\Tidekeeper_${version}_x64_en-US.msi"
+          $nsisExe   = "src-tauri\target\release\bundle\nsis\Tidekeeper_${version}_x64-setup.exe"
+          $nsisZip   = "src-tauri\target\release\bundle\nsis\Tidekeeper_${version}_x64-setup.nsis.zip"
+          $nsisSig   = "src-tauri\target\release\bundle\nsis\Tidekeeper_${version}_x64-setup.nsis.zip.sig"
 
-          Write-Host "=== NSIS bundle directory ==="
-          if (Test-Path $base) { Get-ChildItem $base | Select-Object Name } else { Write-Host "Directory not found: $base" }
-          Write-Host "=== End listing ==="
+          gh release view $tagName --json tagName | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tagName `
+              --title "Tidekeeper $tagName" `
+              --notes "Download the .exe installer below to install or update Tidekeeper."
+          }
 
-          $nsisZipName = "Tidekeeper_${version}_x64-setup.nsis.zip"
-          $nsisSigName = "Tidekeeper_${version}_x64-setup.nsis.zip.sig"
+          gh release upload $tagName $msiBundle --clobber
+          gh release upload $tagName $nsisExe   --clobber
+          gh release upload $tagName $nsisZip   --clobber
+          gh release upload $tagName $nsisSig   --clobber
 
-          if (-not (Test-Path "$base\$nsisZipName")) { Write-Error "NSIS zip not found"; exit 1 }
-
-          Copy-Item "$base\$nsisZipName" "$env:GITHUB_WORKSPACE\$nsisZipName"
-          Copy-Item "$base\$nsisSigName" "$env:GITHUB_WORKSPACE\$nsisSigName"
-
-          Set-Location $env:GITHUB_WORKSPACE
-          gh release upload $tagName $nsisZipName --clobber
-          gh release upload $tagName $nsisSigName --clobber
-
-          $sig = (Get-Content $nsisSigName -Raw).Trim()
-          $url = "https://github.com/ToobsTube/Tidekeeper/releases/download/${tagName}/${nsisZipName}"
+          $sig = (Get-Content $nsisSig -Raw).Trim()
+          $url = "https://github.com/ToobsTube/Tidekeeper/releases/download/${tagName}/Tidekeeper_${version}_x64-setup.nsis.zip"
 
           $json = [ordered]@{
             version  = $version
