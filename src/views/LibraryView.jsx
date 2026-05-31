@@ -306,6 +306,17 @@ export default function LibraryView({ config, onConfigChange }) {
     if (selected) await promptInstall(selected);
   }
 
+  async function rollback(mod) {
+    if (!confirm(`Roll back "${mod.name}" to the previous version? Current files will be replaced with the backup.`)) return;
+    try {
+      await invoke('rollback_mod', { modPath: mod.path });
+      setInstallMsg(`Rolled back "${mod.name}" to previous version.`);
+      loadMods();
+    } catch (err) {
+      setInstallMsg(`Rollback failed: ${err}`);
+    }
+  }
+
   async function toggle(mod, enabled) {
     try {
       const newPath = await invoke('toggle_mod', { modPath: mod.path, enabled });
@@ -560,12 +571,32 @@ export default function LibraryView({ config, onConfigChange }) {
                     ↑ Update
                   </span>
                 )}
-                {mod.configFiles?.length > 0 && (
+                {(() => {
+                  const activeConfigs = mod.configFiles?.filter(f => !f.endsWith('.new')) ?? [];
+                  const newConfigs    = mod.configFiles?.filter(f => f.endsWith('.new')) ?? [];
+                  return (<>
+                    {activeConfigs.length > 0 && (
+                      <button
+                        className="btn-config"
+                        title="Edit config file"
+                        onClick={() => openPath(activeConfigs[0]).catch(e => console.error('openPath failed:', e))}
+                      >⚙</button>
+                    )}
+                    {newConfigs.length > 0 && (
+                      <button
+                        className="btn-config btn-config-new"
+                        title="View new default config (from update) — compare with your settings"
+                        onClick={() => openPath(newConfigs[0]).catch(e => console.error('openPath failed:', e))}
+                      >⚙ new</button>
+                    )}
+                  </>);
+                })()}
+                {mod.hasBackup && (
                   <button
-                    className="btn-config"
-                    title={mod.configFiles.length === 1 ? 'Edit config file' : `${mod.configFiles.length} config files — opens first`}
-                    onClick={() => openPath(mod.configFiles[0])}
-                  >⚙</button>
+                    className="btn-rollback"
+                    title="Roll back to previous version"
+                    onClick={() => rollback(mod)}
+                  >↩</button>
                 )}
                 <label className="toggle" title={mod.enabled ? 'Disable mod' : 'Enable mod'}>
                   <input type="checkbox" checked={mod.enabled} onChange={e => toggle(mod, e.target.checked)} />

@@ -35,6 +35,7 @@ pub struct ModMeta {
     pub file_name: Option<String>,
     pub installed_at: u64,
     pub installed_files: Option<Vec<String>>,
+    pub backup_path: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -46,6 +47,7 @@ pub struct ModEntry {
     pub mod_type: String, // "script" | "pak"
     pub meta: Option<ModMeta>,
     pub config_files: Vec<String>,
+    pub has_backup: bool,
 }
 
 // Returned by peek_zip_name so the UI knows whether to show the name prompt
@@ -132,6 +134,20 @@ fn write_log(app: &AppHandle, level: &str, message: &str) {
     }
 }
 
+fn copy_dir_all(src: &Path, dst: &Path) -> io::Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        if ty.is_dir() {
+            copy_dir_all(&entry.path(), &dst.join(entry.file_name()))?;
+        } else {
+            fs::copy(entry.path(), dst.join(entry.file_name()))?;
+        }
+    }
+    Ok(())
+}
+
 fn config_path(app: &AppHandle) -> PathBuf {
     app.path()
         .app_data_dir()
@@ -215,6 +231,22 @@ fn verify_mod(mod_path: String) -> VerifyResult {
     VerifyResult { mod_path, ok, missing }
 }
 
+#[tauri::command]
+fn rollback_mod(mod_path: String) -> Result<(), String> {
+    let path = PathBuf::from(&mod_path);
+    let meta = read_meta(&path).ok_or("No metadata found for this mod")?;
+    let backup_path = meta.backup_path.ok_or("No backup available for this mod")?;
+    let backup = PathBuf::from(&backup_path);
+    if !backup.exists() {
+        return Err("Backup folder no longer exists".into());
+    }
+    if path.exists() {
+        fs::remove_dir_all(&path).map_err(|e| e.to_string())?;
+    }
+    copy_dir_all(&backup, &path).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 fn find_config_files(mod_path: &Path) -> Vec<String> {
     const CONFIG_EXTS: &[&str] = &["ini", "cfg", "toml"];
     const CONFIG_NAMES: &[&str] = &["config.json", "settings.json", "options.json"];
@@ -224,14 +256,28 @@ fn find_config_files(mod_path: &Path) -> Vec<String> {
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            // Also check one level into a Config/ subfolder
             let dir_name = entry.file_name().to_string_lossy().to_lowercase();
             if dir_name == "config" {
+                // Config/ subfolder — any common config extension
                 if let Ok(sub) = fs::read_dir(&path) {
                     for sub_entry in sub.flatten() {
                         let sp = sub_entry.path();
                         if sp.is_file() && matches_config(&sp) {
                             found.push(sp.to_string_lossy().into_owned());
+                        }
+                    }
+                }
+            } else if dir_name == "scripts" {
+                // Scripts/ subfolder — files named config.* or config.*.new (UE4SS convention)
+                if let Ok(sub) = fs::read_dir(&path) {
+                    for sub_entry in sub.flatten() {
+                        let sp = sub_entry.path();
+                        if sp.is_file() {
+                            let fname = sp.file_name().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+                            let stem = sp.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+                            if stem == "config" || fname.starts_with("config.") {
+                                found.push(sp.to_string_lossy().into_owned());
+                            }
                         }
                     }
                 }
@@ -267,13 +313,19 @@ fn scan_mods(app: AppHandle) -> Result<Vec<ModEntry>, String> {
             let entry = entry.map_err(|e| e.to_string())?;
             if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) { continue; }
             let path = entry.path();
+            let meta = read_meta(&path);
+            let has_backup = meta.as_ref()
+                .and_then(|m| m.backup_path.as_deref())
+                .map(|bp| PathBuf::from(bp).exists())
+                .unwrap_or(false);
             mods.push(ModEntry {
                 name: entry.file_name().to_string_lossy().into_owned(),
                 enabled: path.join("enabled.txt").exists(),
-                meta: read_meta(&path),
+                meta,
                 config_files: find_config_files(&path),
                 path: path.to_string_lossy().into_owned(),
                 mod_type: "script".into(),
+                has_backup,
             });
         }
     }
@@ -292,13 +344,19 @@ fn scan_mods(app: AppHandle) -> Result<Vec<ModEntry>, String> {
                 } else {
                     (raw, true)
                 };
+                let meta = read_meta(&path);
+                let has_backup = meta.as_ref()
+                    .and_then(|m| m.backup_path.as_deref())
+                    .map(|bp| PathBuf::from(bp).exists())
+                    .unwrap_or(false);
                 mods.push(ModEntry {
                     name,
                     enabled,
-                    meta: read_meta(&path),
+                    meta,
                     config_files: find_config_files(&path),
                     path: path.to_string_lossy().into_owned(),
                     mod_type: "pak".into(),
+                    has_backup,
                 });
             }
         }
@@ -910,6 +968,45 @@ async fn process_nxm(app: &AppHandle, nxm_url: String) -> Result<String, String>
         zip_stem.split_once(&prefix).map(|(before, _)| before.to_string())
     });
     let folder_name = file_name_clean.as_deref().unwrap_or(&info.suggested_name);
+
+    // --- Update / backup logic ---
+    let expected_mod_path = mod_install_path(&info.install_type, &mods_folder, folder_name);
+    let is_update = expected_mod_path.as_ref().map(|p| p.exists()).unwrap_or(false);
+    let mut backup_path_str: Option<String> = None;
+    let mut old_config_rel: Vec<String> = vec![];
+
+    if is_update {
+        if let Some(ref old_path) = expected_mod_path {
+            let old_meta = read_meta(old_path);
+            let old_version = old_meta.as_ref()
+                .and_then(|m| m.version.as_deref())
+                .unwrap_or("unknown")
+                .replace(['/', '\\', ':'], "_");
+            let folder_stem = old_path.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "mod".into());
+            let backup_name = format!("{}_{}", folder_stem, old_version);
+            let backup_dir = app.path().app_data_dir().expect("app data dir")
+                .join("backups").join(&backup_name);
+            if backup_dir.exists() { let _ = fs::remove_dir_all(&backup_dir); }
+            copy_dir_all(old_path, &backup_dir).map_err(|e| e.to_string())?;
+            backup_path_str = Some(backup_dir.to_string_lossy().into_owned());
+
+            // Remember relative paths of old config files so we can restore them
+            old_config_rel = find_config_files(old_path)
+                .into_iter()
+                .filter_map(|abs| {
+                    PathBuf::from(&abs).strip_prefix(old_path).ok()
+                        .map(|rel| rel.to_string_lossy().into_owned())
+                })
+                .collect();
+
+            // Remove old folder for a clean install
+            fs::remove_dir_all(old_path).map_err(|e| e.to_string())?;
+        }
+    }
+    // --- end backup logic ---
+
     let installed = install_zip_bytes(zip_bytes, &mods_folder, &zip_stem, folder_name)?;
 
     // Write nexus source metadata
@@ -950,6 +1047,29 @@ async fn process_nxm(app: &AppHandle, nxm_url: String) -> Result<String, String>
     }
 
     if let Some(mod_path) = mod_install_path(&info.install_type, &mods_folder, &installed) {
+        // Restore config files from backup: save new defaults as config.lua.new, put old settings back
+        if is_update {
+            if let Some(ref bp) = backup_path_str {
+                let backup_dir = PathBuf::from(bp);
+                for rel in &old_config_rel {
+                    let new_cfg = mod_path.join(Path::new(rel.as_str()));
+                    let old_cfg = backup_dir.join(Path::new(rel.as_str()));
+                    if new_cfg.exists() && old_cfg.exists() {
+                        // Save new defaults alongside as config.lua.new
+                        let mut new_name = new_cfg.file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        new_name.push_str(".new");
+                        if let Some(parent) = new_cfg.parent() {
+                            let _ = fs::copy(&new_cfg, parent.join(&new_name));
+                        }
+                        // Restore old config as active
+                        let _ = fs::copy(&old_cfg, &new_cfg);
+                    }
+                }
+            }
+        }
+
         let meta = ModMeta {
             source: "nexus".into(),
             mod_id: mod_id_u64,
@@ -959,6 +1079,7 @@ async fn process_nxm(app: &AppHandle, nxm_url: String) -> Result<String, String>
             file_name: file_variant_name.or(file_name_clean),
             installed_at: now_secs(),
             installed_files: Some(collect_mod_files(&mod_path)),
+            backup_path: backup_path_str,
         };
         write_meta(&mod_path, &meta).ok();
     }
@@ -1134,6 +1255,7 @@ async fn install_nexus_mod(app: AppHandle, mod_id: u64, file_id: u64, version: O
             file_name,
             installed_at: now_secs(),
             installed_files: Some(collect_mod_files(&mod_path)),
+            backup_path: None,
         };
         write_meta(&mod_path, &meta).ok();
     }
@@ -2237,6 +2359,7 @@ pub fn run() {
             create_mod_structure,
             scan_mods,
             verify_mod,
+            rollback_mod,
             toggle_mod,
             uninstall_mod,
             install_from_zip,

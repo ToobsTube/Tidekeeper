@@ -84,6 +84,10 @@ export default function UpdatesView({ config, onTabChange }) {
               {withUpdates.length} update{withUpdates.length !== 1 ? 's' : ''} available
             </div>
 
+            <p className="updates-backup-note">
+              When you download an update via Mod Manager Download, Tidekeeper automatically backs up the old version and restores your config settings. A rollback button will appear in the Library if something breaks.
+            </p>
+
             {withUpdates.map(s => (
               <div key={s.modPath} className="update-row">
                 <span className="update-mod-name">{s.modName}</span>
@@ -95,11 +99,11 @@ export default function UpdatesView({ config, onTabChange }) {
                   <span className="update-v-new">{s.latestVersion ?? '?'}</span>
                 </div>
                 <button
-                  className="btn-ghost sm"
+                  className="btn-primary sm"
                   onClick={() => s.modId && openUrl(`https://www.nexusmods.com/subnautica2/mods/${s.modId}?tab=files`)}
                   disabled={!s.modId}
                 >
-                  Open Files Page
+                  Download Update
                 </button>
               </div>
             ))}

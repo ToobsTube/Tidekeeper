@@ -731,6 +731,20 @@ html, body, #root {
   flex-shrink: 0;
 }
 .btn-config:hover { color: var(--accent); border-color: var(--accent); background: rgba(0,212,255,0.06); }
+.btn-config-new { color: var(--text2); border-color: rgba(255,180,50,0.3); font-size: 11px; }
+.btn-config-new:hover { color: rgba(255,180,50,1); border-color: rgba(255,180,50,0.7); background: rgba(255,180,50,0.06); }
+.btn-rollback {
+  padding: 4px 7px;
+  background: none;
+  border: 1px solid var(--border2);
+  border-radius: var(--r-sm);
+  color: var(--text3);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.1s;
+  flex-shrink: 0;
+}
+.btn-rollback:hover { color: rgba(255,180,50,1); border-color: rgba(255,180,50,0.7); background: rgba(255,180,50,0.06); }
 
 .mod-type-badge {
   font-size: 10px; font-weight: 600; letter-spacing: .04em;
@@ -1144,6 +1158,13 @@ html, body, #root {
   font-size: 11px;
   font-weight: 700;
   color: var(--accent);
+}
+.updates-backup-note {
+  font-size: 12px;
+  color: var(--text2);
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--border);
+  line-height: 1.5;
 }
 .updates-up-to-date {
   font-size: 12px;
