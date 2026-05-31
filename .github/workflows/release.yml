@@ -52,8 +52,9 @@ jobs:
         run: |
           $version = "${{ github.ref_name }}".TrimStart('v')
           $tagName = "${{ github.ref_name }}"
-          $nsisZip = "src-tauri/target/release/bundle/nsis/Tidekeeper_${version}_x64-setup.nsis.zip"
-          $nsisSig = "${nsisZip}.sig"
+          $base = "$env:GITHUB_WORKSPACE\src-tauri\target\release\bundle\nsis"
+          $nsisZip = "$base\Tidekeeper_${version}_x64-setup.nsis.zip"
+          $nsisSig = "$base\Tidekeeper_${version}_x64-setup.nsis.zip.sig"
 
           gh release upload $tagName $nsisZip --clobber
           gh release upload $tagName $nsisSig --clobber
@@ -73,5 +74,5 @@ jobs:
             }
           } | ConvertTo-Json -Depth 5
 
-          $json | Out-File -FilePath "latest.json" -Encoding utf8NoBOM
-          gh release upload $tagName latest.json --clobber
+          $json | Out-File -FilePath "$env:GITHUB_WORKSPACE\latest.json" -Encoding utf8NoBOM
+          gh release upload $tagName "$env:GITHUB_WORKSPACE\latest.json" --clobber
