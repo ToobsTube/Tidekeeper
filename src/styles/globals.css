@@ -362,6 +362,24 @@ html, body, #root {
 }
 .search-input:focus { border-color: var(--accent); }
 .search-input::placeholder { color: var(--text3); }
+.search-go, .search-clear {
+  position: absolute;
+  right: 5px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 2px 5px;
+  border-radius: 3px;
+  color: var(--text3);
+  transition: color 0.12s;
+}
+.search-go { color: var(--accent); }
+.search-go:disabled { color: var(--text3); cursor: default; }
+.search-go:not(:disabled):hover { color: var(--accent-light, var(--accent)); }
+.search-clear:hover { color: var(--text); }
 
 /* ── Mod Grid ──────────────────────────────────────────── */
 .pane-scroll {
@@ -526,6 +544,11 @@ html, body, #root {
   outline: 1px solid rgba(255,80,80,0.3);
   outline-offset: -1px;
   background: rgba(255,80,80,0.04);
+}
+.mod-row-missing {
+  outline: 1px solid rgba(255,180,50,0.35);
+  outline-offset: -1px;
+  background: rgba(255,180,50,0.04);
 }
 
 /* ── Unmanaged mod adoption ────────────────────────────── */
@@ -696,6 +719,18 @@ html, body, #root {
   flex-shrink: 0;
 }
 .btn-uninstall:hover { background: rgba(255,74,110,0.1); color: var(--error); border-color: var(--error); }
+.btn-config {
+  padding: 4px 7px;
+  background: none;
+  border: 1px solid var(--border2);
+  border-radius: var(--r-sm);
+  color: var(--text3);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.1s;
+  flex-shrink: 0;
+}
+.btn-config:hover { color: var(--accent); border-color: var(--accent); background: rgba(0,212,255,0.06); }
 
 .mod-type-badge {
   font-size: 10px; font-weight: 600; letter-spacing: .04em;

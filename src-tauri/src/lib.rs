@@ -34,6 +34,7 @@ pub struct ModMeta {
     pub display_name: Option<String>,
     pub file_name: Option<String>,
     pub installed_at: u64,
+    pub installed_files: Option<Vec<String>>,
 }
 
 #[derive(Serialize)]
@@ -44,6 +45,7 @@ pub struct ModEntry {
     pub path: String,
     pub mod_type: String, // "script" | "pak"
     pub meta: Option<ModMeta>,
+    pub config_files: Vec<String>,
 }
 
 // Returned by peek_zip_name so the UI knows whether to show the name prompt
@@ -168,6 +170,90 @@ fn validate_folder(path: String) -> bool {
 }
 
 #[tauri::command]
+fn collect_mod_files(mod_path: &Path) -> Vec<String> {
+    let mut files = Vec::new();
+    fn walk(dir: &Path, base: &Path, out: &mut Vec<String>) {
+        let Ok(entries) = fs::read_dir(dir) else { return };
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_dir() { walk(&p, base, out); }
+            else if let Ok(rel) = p.strip_prefix(base) {
+                out.push(rel.to_string_lossy().into_owned());
+            }
+        }
+    }
+    walk(mod_path, mod_path, &mut files);
+    files
+}
+
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VerifyResult {
+    pub mod_path: String,
+    pub ok: bool,
+    pub missing: Vec<String>,
+}
+
+#[tauri::command]
+fn verify_mod(mod_path: String) -> VerifyResult {
+    let path = PathBuf::from(&mod_path);
+    let meta = match read_meta(&path) {
+        Some(m) => m,
+        None => return VerifyResult { mod_path, ok: true, missing: vec![] },
+    };
+    let Some(files) = meta.installed_files else {
+        return VerifyResult { mod_path, ok: true, missing: vec![] };
+    };
+    let missing: Vec<String> = files.into_iter()
+        .filter(|f| {
+            let p = path.join(f);
+            f != "tidekeeper.json" && !p.exists()
+        })
+        .collect();
+    let ok = missing.is_empty();
+    VerifyResult { mod_path, ok, missing }
+}
+
+fn find_config_files(mod_path: &Path) -> Vec<String> {
+    const CONFIG_EXTS: &[&str] = &["ini", "cfg", "toml"];
+    const CONFIG_NAMES: &[&str] = &["config.json", "settings.json", "options.json"];
+    let mut found = Vec::new();
+
+    let Ok(entries) = fs::read_dir(mod_path) else { return found; };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            // Also check one level into a Config/ subfolder
+            let dir_name = entry.file_name().to_string_lossy().to_lowercase();
+            if dir_name == "config" {
+                if let Ok(sub) = fs::read_dir(&path) {
+                    for sub_entry in sub.flatten() {
+                        let sp = sub_entry.path();
+                        if sp.is_file() && matches_config(&sp) {
+                            found.push(sp.to_string_lossy().into_owned());
+                        }
+                    }
+                }
+            }
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_lowercase();
+        if name == "tidekeeper.json" || name == "enabled.txt" { continue; }
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+        if CONFIG_EXTS.contains(&ext.as_str()) || CONFIG_NAMES.contains(&name.as_str()) {
+            found.push(path.to_string_lossy().into_owned());
+        }
+    }
+    found
+}
+
+fn matches_config(path: &Path) -> bool {
+    const EXTS: &[&str] = &["ini", "cfg", "toml", "json"];
+    path.extension().and_then(|e| e.to_str()).map(|e| EXTS.contains(&e.to_lowercase().as_str())).unwrap_or(false)
+}
+
+#[tauri::command]
 fn scan_mods(app: AppHandle) -> Result<Vec<ModEntry>, String> {
     let config = load_config(&app).ok_or("No config found")?;
     let mods_folder = config.mods_folder.ok_or("No mods folder configured")?;
@@ -185,6 +271,7 @@ fn scan_mods(app: AppHandle) -> Result<Vec<ModEntry>, String> {
                 name: entry.file_name().to_string_lossy().into_owned(),
                 enabled: path.join("enabled.txt").exists(),
                 meta: read_meta(&path),
+                config_files: find_config_files(&path),
                 path: path.to_string_lossy().into_owned(),
                 mod_type: "script".into(),
             });
@@ -209,6 +296,7 @@ fn scan_mods(app: AppHandle) -> Result<Vec<ModEntry>, String> {
                     name,
                     enabled,
                     meta: read_meta(&path),
+                    config_files: find_config_files(&path),
                     path: path.to_string_lossy().into_owned(),
                     mod_type: "pak".into(),
                 });
@@ -625,10 +713,11 @@ fn install_from_zip(app: AppHandle, zip_path: String, mod_name: String) -> Resul
         Ok(name) => {
             write_log(&app, "INFO", &format!("Installed: {}", name));
             if let Some(mod_path) = mod_install_path(&install_type, &mods_folder, &name) {
+                let files = collect_mod_files(&mod_path);
                 let meta = if let Some(mid) = nexus_mod_id {
-                    ModMeta { source: "nexus".into(), mod_id: Some(mid), installed_at: now_secs(), ..Default::default() }
+                    ModMeta { source: "nexus".into(), mod_id: Some(mid), installed_at: now_secs(), installed_files: Some(files), ..Default::default() }
                 } else {
-                    ModMeta { source: "manual".into(), installed_at: now_secs(), ..Default::default() }
+                    ModMeta { source: "manual".into(), installed_at: now_secs(), installed_files: Some(files), ..Default::default() }
                 };
                 write_meta(&mod_path, &meta).ok();
             }
@@ -869,6 +958,7 @@ async fn process_nxm(app: &AppHandle, nxm_url: String) -> Result<String, String>
             display_name,
             file_name: file_variant_name.or(file_name_clean),
             installed_at: now_secs(),
+            installed_files: Some(collect_mod_files(&mod_path)),
         };
         write_meta(&mod_path, &meta).ok();
     }
@@ -1043,6 +1133,7 @@ async fn install_nexus_mod(app: AppHandle, mod_id: u64, file_id: u64, version: O
             display_name: None,
             file_name,
             installed_at: now_secs(),
+            installed_files: Some(collect_mod_files(&mod_path)),
         };
         write_meta(&mod_path, &meta).ok();
     }
@@ -2145,6 +2236,7 @@ pub fn run() {
             find_subnautica2,
             create_mod_structure,
             scan_mods,
+            verify_mod,
             toggle_mod,
             uninstall_mod,
             install_from_zip,

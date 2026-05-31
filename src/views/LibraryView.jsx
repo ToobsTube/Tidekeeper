@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { open, save } from '@tauri-apps/plugin-dialog';
-import { openUrl } from '@tauri-apps/plugin-opener';
+import { openUrl, openPath } from '@tauri-apps/plugin-opener';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 
 export default function LibraryView({ config, onConfigChange }) {
@@ -30,6 +30,7 @@ export default function LibraryView({ config, onConfigChange }) {
   const [packProfileName, setPackProfileName]     = useState('');
   const [updateStatuses, setUpdateStatuses] = useState({}); // modPath → ModUpdateStatus
   const [checkingUpdates, setCheckingUpdates] = useState(false);
+  const [verifyResults, setVerifyResults] = useState({}); // modPath → { ok, missing }
 
   // Detect enabled mods that share the same Nexus mod_id (variant conflicts)
   const conflictGroups = useMemo(() => {
@@ -285,6 +286,21 @@ export default function LibraryView({ config, onConfigChange }) {
     }
   }
 
+  async function verifyAll() {
+    if (!mods) return;
+    const results = {};
+    for (const mod of mods) {
+      const r = await invoke('verify_mod', { modPath: mod.path });
+      if (r.missing.length > 0) results[mod.path] = r;
+    }
+    setVerifyResults(results);
+    const bad = Object.keys(results).length;
+    setInstallMsg(bad > 0
+      ? { ok: false, text: `${bad} mod${bad !== 1 ? 's' : ''} have missing files` }
+      : { ok: true, text: 'All mods verified OK' });
+    setTimeout(() => setInstallMsg(null), 5000);
+  }
+
   async function pickZip() {
     const selected = await open({ filters: [{ name: 'Mod Archive', extensions: ['zip', '7z', 'rar'] }], title: 'Select Mod Archive' });
     if (selected) await promptInstall(selected);
@@ -364,6 +380,9 @@ export default function LibraryView({ config, onConfigChange }) {
           )}
           <button className="btn-ghost sm" onClick={checkUpdates} disabled={checkingUpdates || loading}>
             {checkingUpdates ? 'Checking…' : 'Check Updates'}
+          </button>
+          <button className="btn-ghost sm" onClick={verifyAll} disabled={loading || !mods?.length}>
+            Verify Files
           </button>
           <button className="btn-ghost sm" onClick={exportModPack} disabled={installing || loading}>
             Export Pack
@@ -514,8 +533,11 @@ export default function LibraryView({ config, onConfigChange }) {
           mods.map(mod => {
             const upd = updateStatuses[mod.path];
             return (
-              <div key={mod.path} className={`mod-row${conflictPaths.has(mod.path) ? ' mod-row-conflict' : ''}`}>
-                <span className={`mod-row-name${mod.enabled ? '' : ' disabled'}`}>
+              <div key={mod.path} className={`mod-row${conflictPaths.has(mod.path) ? ' mod-row-conflict' : ''}${verifyResults[mod.path] ? ' mod-row-missing' : ''}`}>
+                <span
+                  className={`mod-row-name${mod.enabled ? '' : ' disabled'}`}
+                  title={verifyResults[mod.path] ? `Missing: ${verifyResults[mod.path].missing.join(', ')}` : undefined}
+                >
                   {mod.meta?.displayName ?? mod.name}
                   {mod.meta?.displayName && mod.meta.displayName !== mod.name && (
                     <span className="mod-row-foldername">{mod.name}</span>
@@ -537,6 +559,13 @@ export default function LibraryView({ config, onConfigChange }) {
                   <span className="mod-update-badge" title={`Update available: v${upd.latestVersion}`}>
                     ↑ Update
                   </span>
+                )}
+                {mod.configFiles?.length > 0 && (
+                  <button
+                    className="btn-config"
+                    title={mod.configFiles.length === 1 ? 'Edit config file' : `${mod.configFiles.length} config files — opens first`}
+                    onClick={() => openPath(mod.configFiles[0])}
+                  >⚙</button>
                 )}
                 <label className="toggle" title={mod.enabled ? 'Disable mod' : 'Enable mod'}>
                   <input type="checkbox" checked={mod.enabled} onChange={e => toggle(mod, e.target.checked)} />

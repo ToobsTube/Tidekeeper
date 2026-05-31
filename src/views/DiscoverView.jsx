@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useDeferredValue } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { openUrl } from '@tauri-apps/plugin-opener';
 // invoke is used by InstallModal for install_nexus_mod (future)
@@ -177,10 +177,10 @@ export default function DiscoverView({ config, onTabChange, isPremium }) {
   const [nexusMods, setNexusMods] = useState(null);
   const [loading, setLoading]   = useState(false);
   const [error, setError]       = useState(null);
-  const [search, setSearch]     = useState('');
+  const [search, setSearch]       = useState('');
+  const [activeSearch, setActiveSearch] = useState(''); // committed search term
   const [selected, setSelected]   = useState(null);
   const [detailMod, setDetailMod] = useState(null);
-  const deferred = useDeferredValue(search);
 
   const hasApiKey = !!config?.nexusApiKey;
 
@@ -195,54 +195,53 @@ export default function DiscoverView({ config, onTabChange, isPremium }) {
                    : 'endorsements';
   const sortDir = 'DESC';
 
+  const gqlHeaders = {
+    'Content-Type': 'application/json',
+    apikey: config.nexusApiKey,
+    'Application-Name': 'Tidekeeper',
+    'Application-Version': '0.1.0',
+  };
+
+  const buildQuery = (off, count) => `query {
+    mods(
+      filter: { gameDomainName: { value: "subnautica2" } }
+      sort: [{ ${sortField}: { direction: ${sortDir} } }]
+      count: ${count}
+      offset: ${off}
+    ) {
+      nodes {
+        modId name summary pictureUrl
+        uploader { name memberId }
+        downloads endorsements
+      }
+      totalCount
+    }
+  }`;
+
+  const mapMod = m => ({
+    modId: m.modId,
+    name: m.name,
+    summary: m.summary,
+    pictureUrl: m.pictureUrl,
+    author: m.uploader?.name ?? '',
+    downloadCount: m.downloads,
+    endorsementCount: m.endorsements,
+  });
+
   const fetchMods = async (off, replace) => {
     if (replace) { setLoading(true); setError(null); setNexusMods(null); }
     else setLoadingMore(true);
 
-    const query = `query {
-      mods(
-        filter: { gameDomainName: { value: "subnautica2" } }
-        sort: [{ ${sortField}: { direction: ${sortDir} } }]
-        count: ${PAGE}
-        offset: ${off}
-      ) {
-        nodes {
-          modId
-          name
-          summary
-          pictureUrl
-          uploader { name memberId }
-          downloads
-          endorsements
-        }
-        totalCount
-      }
-    }`;
-
     try {
       const r = await fetch('https://api.nexusmods.com/v2/graphql', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          apikey: config.nexusApiKey,
-          'Application-Name': 'Tidekeeper',
-          'Application-Version': '0.1.0',
-        },
-        body: JSON.stringify({ query }),
+        headers: gqlHeaders,
+        body: JSON.stringify({ query: buildQuery(off, PAGE) }),
       });
       if (!r.ok) throw new Error(`Nexus API error: ${r.status}`);
       const json = await r.json();
       if (json.errors) throw new Error(json.errors[0]?.message ?? 'GraphQL error');
-      const nodes = json.data?.mods?.nodes ?? [];
-      const mapped = nodes.map(m => ({
-        modId: m.modId,
-        name: m.name,
-        summary: m.summary,
-        pictureUrl: m.pictureUrl,
-        author: m.uploader?.name ?? '',
-        downloadCount: m.downloads,
-        endorsementCount: m.endorsements,
-      }));
+      const mapped = (json.data?.mods?.nodes ?? []).map(mapMod);
       setTotal(json.data?.mods?.totalCount ?? null);
       setNexusMods(prev => replace ? mapped : [...(prev ?? []), ...mapped]);
       setOffset(off + PAGE);
@@ -254,31 +253,71 @@ export default function DiscoverView({ config, onTabChange, isPremium }) {
     }
   };
 
+  // Fetch a large batch for search and filter client-side
+  const fetchSearch = async (term) => {
+    setLoading(true); setError(null); setNexusMods(null);
+    try {
+      // Fetch up to 3 pages in parallel to cover the SN2 catalogue
+      const pages = await Promise.all([0, PAGE, PAGE * 2].map(off =>
+        fetch('https://api.nexusmods.com/v2/graphql', {
+          method: 'POST',
+          headers: gqlHeaders,
+          body: JSON.stringify({ query: buildQuery(off, PAGE) }),
+        }).then(r => r.json()).then(j => (j.data?.mods?.nodes ?? []).map(mapMod))
+      ));
+      const all = pages.flat();
+      const q = term.toLowerCase();
+      const filtered = all.filter(m =>
+        m.name.toLowerCase().includes(q) || m.author.toLowerCase().includes(q)
+      );
+      setNexusMods(filtered);
+      setTotal(filtered.length);
+      setOffset(PAGE * 3);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (source !== 'nexus' || !hasApiKey) return;
-    setOffset(0);
-    setTotal(null);
+    setOffset(0); setTotal(null);
     fetchMods(0, true);
   }, [source, category, hasApiKey]);
 
-  // Infinite scroll: load next page when sentinel scrolls into view
+  useEffect(() => {
+    if (source !== 'nexus' || !hasApiKey) return;
+    if (activeSearch) {
+      fetchSearch(activeSearch);
+    } else {
+      setOffset(0); setTotal(null);
+      fetchMods(0, true);
+    }
+  }, [activeSearch]);
+
+  function commitSearch() {
+    const term = search.trim();
+    setActiveSearch(term);
+  }
+
+  function clearSearch() {
+    setSearch('');
+    setActiveSearch('');
+  }
+
+  // Infinite scroll only when not searching
   useEffect(() => {
     const el = sentinelRef.current;
-    if (!el || loadingMore || loading || !nexusMods || total === null || nexusMods.length >= total || deferred) return;
+    if (!el || activeSearch || loadingMore || loading || !nexusMods || total === null || nexusMods.length >= total) return;
     const observer = new IntersectionObserver(([entry]) => {
       if (entry.isIntersecting) fetchMods(offset, false);
     }, { threshold: 0 });
     observer.observe(el);
     return () => observer.disconnect();
-  }, [offset, total, nexusMods?.length, loadingMore, loading, !!deferred]);
+  }, [offset, total, nexusMods?.length, loadingMore, loading, !!activeSearch]);
 
-  const visible = nexusMods
-    ? nexusMods.filter(m => {
-        if (!deferred) return true;
-        const q = deferred.toLowerCase();
-        return m.name.toLowerCase().includes(q) || m.author.toLowerCase().includes(q);
-      })
-    : [];
+  const visible = nexusMods ?? [];
 
   return (
     <>
@@ -305,7 +344,18 @@ export default function DiscoverView({ config, onTabChange, isPremium }) {
               <svg className="search-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
               </svg>
-              <input className="search-input" placeholder="Search mods…" value={search} onChange={e => setSearch(e.target.value)} autoComplete="off" />
+              <input
+                className="search-input"
+                placeholder="Search mods… (Enter)"
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') commitSearch(); if (e.key === 'Escape') clearSearch(); }}
+                autoComplete="off"
+              />
+              {activeSearch
+                ? <button className="search-clear" onClick={clearSearch} title="Clear search">✕</button>
+                : <button className="search-go" onClick={commitSearch} disabled={!search.trim()}>Search</button>
+              }
             </div>
           </>
         )}
@@ -332,7 +382,7 @@ export default function DiscoverView({ config, onTabChange, isPremium }) {
         ) : error ? (
           <div className="empty-state" style={{color:'var(--error)'}}><p>{error}</p></div>
         ) : visible.length === 0 ? (
-          <div className="empty-state"><p>No mods match "{search}".</p></div>
+          <div className="empty-state"><p>{activeSearch ? `No mods found for "${activeSearch}".` : 'No mods found.'}</p></div>
         ) : (
           <>
         <div className="mods-grid">
