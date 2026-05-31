@@ -54,9 +54,9 @@ jobs:
           Compress-Archive -Path $nsisExe -DestinationPath $nsisZip -Force
 
           if ($env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD) {
-            npx tauri signer sign -k $keyPath -p $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD $nsisZip
+            npx tauri signer sign -f $keyPath -p $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD $nsisZip
           } else {
-            npx tauri signer sign -k $keyPath $nsisZip
+            npx tauri signer sign -f $keyPath $nsisZip
           }
 
       - name: Create release and upload assets
