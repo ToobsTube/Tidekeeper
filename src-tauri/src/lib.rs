@@ -2429,15 +2429,18 @@ async fn install_update(app: AppHandle) -> Result<(), String> {
     );
     fs::write(&cmd_path, &script).map_err(|e| e.to_string())?;
 
-    // Launch the trampoline detached so it survives our process exiting
+    // Launch the trampoline detached so it survives our process exiting.
+    // CREATE_BREAKAWAY_FROM_JOB ensures cmd.exe is not killed when Tidekeeper's
+    // job object closes on exit. CREATE_NO_WINDOW gives cmd.exe a hidden console.
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        const DETACHED_PROCESS: u32 = 0x00000008;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
+        const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x01000000;
         std::process::Command::new("cmd.exe")
             .args(["/c", cmd_path.to_str().unwrap_or("")])
-            .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
+            .creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB)
             .spawn()
             .map_err(|e| format!("Failed to launch updater: {}", e))?;
     }
