@@ -63,10 +63,13 @@ jobs:
         run: |
           $version = "${{ github.ref_name }}".TrimStart('v')
           $tagName = "${{ github.ref_name }}"
-          $msiBundle = "src-tauri\target\release\bundle\msi\Tidekeeper_${version}_x64_en-US.msi"
-          $nsisExe   = "src-tauri\target\release\bundle\nsis\Tidekeeper_${version}_x64-setup.exe"
-          $nsisZip   = "src-tauri\target\release\bundle\nsis\Tidekeeper_${version}_x64-setup.nsis.zip"
-          $nsisSig   = "src-tauri\target\release\bundle\nsis\Tidekeeper_${version}_x64-setup.nsis.zip.sig"
+          $msiBundle  = "src-tauri\target\release\bundle\msi\Tidekeeper_${version}_x64_en-US.msi"
+          $nsisExeSrc = "src-tauri\target\release\bundle\nsis\Tidekeeper_${version}_x64-setup.exe"
+          $nsisZip    = "src-tauri\target\release\bundle\nsis\Tidekeeper_${version}_x64-setup.nsis.zip"
+          $nsisSig    = "src-tauri\target\release\bundle\nsis\Tidekeeper_${version}_x64-setup.nsis.zip.sig"
+
+          $nsisExe = "src-tauri\target\release\bundle\nsis\Tidekeeper-${version}-x64-setup.exe"
+          Copy-Item $nsisExeSrc $nsisExe
 
           gh release view $tagName --json tagName | Out-Null
           if ($LASTEXITCODE -ne 0) {
