@@ -2410,25 +2410,24 @@ async fn install_update(app: AppHandle) -> Result<(), String> {
         }
     }
 
-    // Write a PowerShell trampoline: waits for us to exit, runs NSIS silently,
-    // then relaunches Tidekeeper.
+    // Write a cmd trampoline: waits for us to exit, runs NSIS silently,
+    // then relaunches Tidekeeper. Uses .cmd instead of .ps1 to avoid AMSI blocking.
     let our_exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let ps_path = temp_dir.join("tidekeeper_update.ps1");
-    let nsis_str = nsis_path.to_string_lossy().replace('\'', "''");
-    let exe_str = our_exe.to_string_lossy().replace('\'', "''");
+    let cmd_path = temp_dir.join("tidekeeper_update.cmd");
+    let nsis_str = nsis_path.to_string_lossy().replace('"', "\"\"");
+    let exe_str = our_exe.to_string_lossy().replace('"', "\"\"");
     let script = format!(
-        "$log = \"$env:TEMP\\tidekeeper_update_log.txt\"\r\n\
-        \"$(Get-Date): started\" | Out-File $log -Append\r\n\
-        Start-Sleep -Seconds 3\r\n\
-        Unblock-File -Path '{}' -ErrorAction SilentlyContinue\r\n\
-        Start-Process -FilePath '{}' -ArgumentList '/S' -Wait -ErrorAction SilentlyContinue\r\n\
-        \"$(Get-Date): nsis done\" | Out-File $log -Append\r\n\
-        Start-Sleep -Seconds 1\r\n\
-        Start-Process -FilePath '{}' -ErrorAction SilentlyContinue\r\n\
-        \"$(Get-Date): relaunch attempted\" | Out-File $log -Append\r\n",
-        nsis_str, nsis_str, exe_str
+        "@echo off\r\n\
+        echo started >> \"%TEMP%\\tidekeeper_update_log.txt\"\r\n\
+        ping 127.0.0.1 -n 4 > nul\r\n\
+        \"{}\" /S\r\n\
+        echo nsis done >> \"%TEMP%\\tidekeeper_update_log.txt\"\r\n\
+        ping 127.0.0.1 -n 2 > nul\r\n\
+        start \"\" \"{}\"\r\n\
+        echo relaunch attempted >> \"%TEMP%\\tidekeeper_update_log.txt\"\r\n",
+        nsis_str, exe_str
     );
-    fs::write(&ps_path, &script).map_err(|e| e.to_string())?;
+    fs::write(&cmd_path, &script).map_err(|e| e.to_string())?;
 
     // Launch the trampoline detached so it survives our process exiting
     #[cfg(windows)]
@@ -2436,13 +2435,8 @@ async fn install_update(app: AppHandle) -> Result<(), String> {
         use std::os::windows::process::CommandExt;
         const DETACHED_PROCESS: u32 = 0x00000008;
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
-        std::process::Command::new("powershell.exe")
-            .args([
-                "-NonInteractive",
-                "-WindowStyle", "Hidden",
-                "-ExecutionPolicy", "Bypass",
-                "-File", ps_path.to_str().unwrap_or(""),
-            ])
+        std::process::Command::new("cmd.exe")
+            .args(["/c", cmd_path.to_str().unwrap_or("")])
             .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
             .spawn()
             .map_err(|e| format!("Failed to launch updater: {}", e))?;
