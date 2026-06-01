@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Tidekeeper",
-  "version": "0.5.24",
+  "version": "0.5.25",
   "identifier": "com.tidekeeper.app",
   "build": {
     "frontendDist": "../dist",
@@ -46,12 +46,6 @@
       "desktop": {
         "schemes": ["nxm"]
       }
-    },
-    "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEJCNjRGNjJDRDQ5Q0E3RUIKUldUcnA1elVMUFprdTJrZkIxVDhwVEI0Z3QzNHJnUmhFOXZGbXNMY3V0RldNQzZCRlNRYUJsL2MK",
-      "endpoints": [
-        "https://github.com/ToobsTube/Tidekeeper/releases/latest/download/latest.json"
-      ]
     }
   }
 }

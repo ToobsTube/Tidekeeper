@@ -8,10 +8,8 @@ import { PRESETS, saveTheme } from '../utils/theme';
 
 export default function SettingsView({ config, onConfigChange, updateInfo, onRecheckUpdate }) {
   const [folder, setFolder]           = useState(config?.modsFolder ?? '');
-  const [apiKey, setApiKey]           = useState(config?.nexusApiKey ?? '');
   const [downloadDir, setDownloadDir] = useState(config?.downloadDir ?? '');
   const [folderMsg, setFolderMsg]     = useState(null);
-  const [keyMsg, setKeyMsg]           = useState(null);
   const [dlMsg, setDlMsg]             = useState(null);
   const [appVersion, setAppVersion]   = useState('');
   const [installing, setInstalling]   = useState(false);
@@ -62,9 +60,14 @@ export default function SettingsView({ config, onConfigChange, updateInfo, onRec
   }
 
   async function doInstallUpdate() {
+    const isPremium = authStatus.isPremium || config?.nexusIsPremium;
+    if (!isPremium) {
+      openUrl('https://www.nexusmods.com/subnautica2/mods/343?tab=files');
+      return;
+    }
     setInstalling(true);
     try {
-      await invoke('install_update');
+      await invoke('install_update', { fileId: updateInfo.fileId });
     } catch (e) {
       alert(`Update failed: ${e}`);
       setInstalling(false);
@@ -104,15 +107,6 @@ export default function SettingsView({ config, onConfigChange, updateInfo, onRec
     onConfigChange(updated);
     setDlMsg({ ok: true, text: 'Saved.' });
     setTimeout(() => setDlMsg(null), 2000);
-  }
-
-  async function saveApiKey() {
-    setKeyMsg(null);
-    const updated = { ...config, nexusApiKey: apiKey.trim() };
-    await invoke('save_config', { config: updated });
-    onConfigChange(updated);
-    setKeyMsg({ ok: true, text: 'Saved.' });
-    setTimeout(() => setKeyMsg(null), 2000);
   }
 
   return (
@@ -174,9 +168,15 @@ export default function SettingsView({ config, onConfigChange, updateInfo, onRec
                 <p className="settings-hint" style={{marginTop:'8px', whiteSpace:'pre-wrap'}}>{updateInfo.notes}</p>
               )}
               <div className="settings-row" style={{marginTop:'10px'}}>
-                <button className="btn-primary sm" onClick={doInstallUpdate} disabled={installing}>
-                  {installing ? 'Downloading & installing…' : `Update to v${updateInfo.version} and restart`}
-                </button>
+                {(authStatus.isPremium || config?.nexusIsPremium) ? (
+                  <button className="btn-primary sm" onClick={doInstallUpdate} disabled={installing}>
+                    {installing ? 'Downloading & installing…' : `Update to v${updateInfo.version} and restart`}
+                  </button>
+                ) : (
+                  <button className="btn-primary sm" onClick={doInstallUpdate}>
+                    {`Download v${updateInfo.version} on Nexus`}
+                  </button>
+                )}
               </div>
             </>
           )}
@@ -239,31 +239,6 @@ export default function SettingsView({ config, onConfigChange, updateInfo, onRec
             <button className="btn-primary sm" onClick={saveDownloadDir}>Save Changes</button>
             {dlMsg && <span className="save-ok" style={dlMsg.ok ? {} : {color:'var(--error)'}}>{dlMsg.text}</span>}
           </div>
-        </section>
-
-        {/* Nexus API Key */}
-        <section className="settings-section">
-          <h3>Nexus Mods API Key</h3>
-          <p className="settings-hint">
-            Your personal API key lets the app browse and install mods from Nexus on your behalf.
-            Find it at{' '}
-            <a onClick={() => openUrl('https://next.nexusmods.com/settings/api-keys')} style={{cursor:'pointer'}}>
-              next.nexusmods.com → Settings → API Keys
-            </a>
-            {' '}under <strong>Personal API Key</strong>.
-          </p>
-          <div className="input-row">
-            <input
-              className="input mono"
-              placeholder="Paste your API key here…"
-              value={apiKey}
-              onChange={e => setApiKey(e.target.value)}
-              spellCheck={false}
-              type="password"
-            />
-            <button className="btn-ghost" onClick={saveApiKey}>Save</button>
-          </div>
-          {keyMsg && <p style={{marginTop:'8px', fontSize:'12px', color: keyMsg.ok ? 'var(--success)' : 'var(--error)'}}>{keyMsg.text}</p>}
         </section>
 
       </div>

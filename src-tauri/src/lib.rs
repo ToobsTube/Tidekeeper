@@ -1,5 +1,4 @@
 use reqwest::Client;
-use tauri_plugin_updater::UpdaterExt;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fs, io, path::{Path, PathBuf}, sync::Mutex};
 use tauri::{AppHandle, Emitter, Manager};
@@ -2349,50 +2348,74 @@ pub struct UpdateInfo {
     pub available: bool,
     pub version: Option<String>,
     pub notes: Option<String>,
+    pub file_id: Option<u64>,
 }
 
 async fn try_check_update(app: &AppHandle) -> Result<UpdateInfo, String> {
-    let updater = app.updater_builder().build().map_err(|e| e.to_string())?;
-    match updater.check().await.map_err(|e| e.to_string())? {
-        Some(update) => Ok(UpdateInfo {
-            available: true,
-            version: Some(update.version.to_string()),
-            notes: update.body.clone(),
-        }),
-        None => Ok(UpdateInfo { available: false, version: None, notes: None }),
+    let current = app.package_info().version.to_string();
+    let (auth_header, auth_value) = get_nexus_auth(app).await?;
+    let client = Client::new();
+    let resp: NexusFilesResponse = client
+        .get("https://api.nexusmods.com/v1/games/subnautica2/mods/343/files.json")
+        .header(auth_header.as_str(), auth_value.as_str())
+        .header("Application-Name", "Tidekeeper")
+        .header("Application-Version", &current)
+        .send().await.map_err(|e| e.to_string())?
+        .json().await.map_err(|e| e.to_string())?;
+    let latest = resp.files.into_iter()
+        .filter(|f| f.category_id == Some(1))
+        .last();
+    match latest {
+        None => Ok(UpdateInfo { available: false, version: None, notes: None, file_id: None }),
+        Some(f) => {
+            let nexus_ver = f.version.clone().unwrap_or_default();
+            let available = nexus_ver != current;
+            Ok(UpdateInfo {
+                available,
+                version: Some(nexus_ver),
+                notes: None,
+                file_id: if available { Some(f.file_id) } else { None },
+            })
+        }
     }
 }
 
 #[tauri::command]
 async fn check_for_update(app: AppHandle) -> UpdateInfo {
-    // Silently return available:false on any error (e.g. dev mode, no network)
-    try_check_update(&app).await.unwrap_or(UpdateInfo { available: false, version: None, notes: None })
+    try_check_update(&app).await
+        .unwrap_or(UpdateInfo { available: false, version: None, notes: None, file_id: None })
 }
 
 #[tauri::command]
-async fn install_update(app: AppHandle) -> Result<(), String> {
-    let updater = app.updater_builder().build().map_err(|e| e.to_string())?;
-    let update = updater.check().await.map_err(|e| e.to_string())?
-        .ok_or("No update available")?;
+async fn install_update(app: AppHandle, file_id: u64) -> Result<(), String> {
+    let current = app.package_info().version.to_string();
+    let (auth_header, auth_value) = get_nexus_auth(&app).await?;
+    let client = Client::new();
 
-    let version = update.version.clone();
-
-    // Download the NSIS zip directly — bypasses Tauri's internal NSIS runner
-    // which deadlocks because it waits for Tidekeeper to close while Tidekeeper
-    // waits for it to finish.
-    let zip_url = format!(
-        "https://github.com/ToobsTube/Tidekeeper/releases/download/v{0}/Tidekeeper_{0}_x64-setup.nsis.zip",
-        version
+    // Get the download link from Nexus for the specific file
+    let links_url = format!(
+        "https://api.nexusmods.com/v1/games/subnautica2/mods/343/files/{}/download_link.json",
+        file_id
     );
-    let zip_bytes = reqwest::get(&zip_url)
-        .await.map_err(|e| format!("Download failed: {}", e))?
+    let links: Vec<DownloadLink> = client
+        .get(&links_url)
+        .header(auth_header.as_str(), auth_value.as_str())
+        .header("Application-Name", "Tidekeeper")
+        .header("Application-Version", &current)
+        .send().await.map_err(|e| e.to_string())?
+        .json().await.map_err(|e| format!("Failed to get download link: {}", e))?;
+    let uri = links.into_iter().next().ok_or("No download link returned")?.uri;
+
+    let bytes = client.get(&uri)
+        .send().await.map_err(|e| format!("Download failed: {}", e))?
         .bytes().await.map_err(|e| format!("Download read failed: {}", e))?;
 
-    // Extract the NSIS exe from the zip
     let temp_dir = std::env::temp_dir();
     let nsis_path = temp_dir.join("tidekeeper_update.exe");
-    {
-        let cursor = io::Cursor::new(zip_bytes.as_ref());
+
+    // Auto-detect zip vs direct exe by magic bytes (PK = zip, MZ = exe)
+    if bytes.starts_with(b"PK") {
+        let cursor = io::Cursor::new(bytes.as_ref());
         let mut archive = zip::ZipArchive::new(cursor)
             .map_err(|e| format!("Zip error: {}", e))?;
         let mut found = false;
@@ -2406,8 +2429,10 @@ async fn install_update(app: AppHandle) -> Result<(), String> {
             }
         }
         if !found {
-            return Err("Installer not found in update package".to_string());
+            return Err("Installer not found in zip".to_string());
         }
+    } else {
+        fs::write(&nsis_path, &bytes).map_err(|e| e.to_string())?;
     }
 
     // Write a cmd trampoline: waits for us to exit, runs NSIS silently,
@@ -2476,7 +2501,6 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_deep_link::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(NxmQueue::default())
         .setup(|app| {
             #[cfg(debug_assertions)]
