@@ -206,9 +206,15 @@ export default function SettingsView({ config, onConfigChange, updateInfo, onRec
           ) : (
             <>
               <p className="settings-hint">
-                One-click Nexus sign-in is coming in a future update. For now, use your
-                personal API key below to browse and install mods.
+                Sign in with your Nexus account to browse and install mods.
+                Premium members also get automatic in-app updates.
               </p>
+              <div className="settings-row">
+                <button className="btn-primary sm" onClick={doSignIn} disabled={signingIn}>
+                  {signingIn ? 'Opening browser…' : 'Sign in with Nexus'}
+                </button>
+                {oauthError && <span style={{fontSize:'12px', color:'var(--error)', marginLeft:'10px'}}>{oauthError}</span>}
+              </div>
             </>
           )}
         </section>
