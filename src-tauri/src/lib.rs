@@ -2374,9 +2374,73 @@ async fn install_update(app: AppHandle) -> Result<(), String> {
     let updater = app.updater_builder().build().map_err(|e| e.to_string())?;
     let update = updater.check().await.map_err(|e| e.to_string())?
         .ok_or("No update available")?;
-    update.download_and_install(|_, _| {}, || {}).await.map_err(|e| e.to_string())?;
-    app.exit(0);
-    Ok(())
+
+    let version = update.version.clone();
+
+    // Download the NSIS zip directly — bypasses Tauri's internal NSIS runner
+    // which deadlocks because it waits for Tidekeeper to close while Tidekeeper
+    // waits for it to finish.
+    let zip_url = format!(
+        "https://github.com/ToobsTube/Tidekeeper/releases/download/v{0}/Tidekeeper_{0}_x64-setup.nsis.zip",
+        version
+    );
+    let zip_bytes = reqwest::get(&zip_url)
+        .await.map_err(|e| format!("Download failed: {}", e))?
+        .bytes().await.map_err(|e| format!("Download read failed: {}", e))?;
+
+    // Extract the NSIS exe from the zip
+    let temp_dir = std::env::temp_dir();
+    let nsis_path = temp_dir.join("tidekeeper_update.exe");
+    {
+        let cursor = io::Cursor::new(zip_bytes.as_ref());
+        let mut archive = zip::ZipArchive::new(cursor)
+            .map_err(|e| format!("Zip error: {}", e))?;
+        let mut found = false;
+        for i in 0..archive.len() {
+            let mut zf = archive.by_index(i).map_err(|e| e.to_string())?;
+            if zf.name().ends_with(".exe") {
+                let mut out = fs::File::create(&nsis_path).map_err(|e| e.to_string())?;
+                io::copy(&mut zf, &mut out).map_err(|e| e.to_string())?;
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            return Err("Installer not found in update package".to_string());
+        }
+    }
+
+    // Write a PowerShell trampoline: waits for us to exit, runs NSIS silently,
+    // then relaunches Tidekeeper.
+    let our_exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let ps_path = temp_dir.join("tidekeeper_update.ps1");
+    let nsis_str = nsis_path.to_string_lossy().replace('\'', "''");
+    let exe_str = our_exe.to_string_lossy().replace('\'', "''");
+    let script = format!(
+        "Start-Sleep -Seconds 2\r\nStart-Process -FilePath '{}' -ArgumentList '/S' -Wait\r\nStart-Process -FilePath '{}'\r\n",
+        nsis_str, exe_str
+    );
+    fs::write(&ps_path, &script).map_err(|e| e.to_string())?;
+
+    // Launch the trampoline detached so it survives our process exiting
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const DETACHED_PROCESS: u32 = 0x00000008;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
+        std::process::Command::new("powershell.exe")
+            .args([
+                "-NonInteractive",
+                "-WindowStyle", "Hidden",
+                "-ExecutionPolicy", "Bypass",
+                "-File", ps_path.to_str().unwrap_or(""),
+            ])
+            .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
+            .spawn()
+            .map_err(|e| format!("Failed to launch updater: {}", e))?;
+    }
+
+    std::process::exit(0);
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
