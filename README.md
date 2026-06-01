@@ -23,7 +23,6 @@ Browse, install, and manage mods from Nexus Mods directly inside the app. Suppor
 - **Updates tab** — see which of your installed Nexus mods have newer versions available. Premium members get a direct Update button; free members get a link to the Nexus files page
 - **Launch Subnautica 2** directly from the app
 - Supports ZIP, 7z, and RAR archives
-- App auto-updater — stay up to date automatically
 - Theme picker — choose from preset accent colors or pick a custom one
 - Diagnostics tool — scan for common issues, view Tidekeeper and UE4SS logs, export a report
 
@@ -33,7 +32,6 @@ Browse, install, and manage mods from Nexus Mods directly inside the app. Suppor
 
 - **Windows 10 or later** (64-bit)
 - **Subnautica 2** installed via Steam
-- **Nexus Mods account** with a Personal API Key (free tier works)
 - **7-Zip** installed at the default path (`C:\Program Files\7-Zip\`) — only required if you install mods packaged as `.rar` archives
 
 ---
@@ -56,16 +54,6 @@ C:\Program Files (x86)\Steam\steamapps\common\Subnautica2\Binaries\Win64\ue4ss\M
 UE4SS is required for script mods. Tidekeeper installs it for you — but you must use the **Subnautica 2 specific build from Nexus Mods**, not the generic release from GitHub. The GitHub version will not work.
 
 Download the SN2 build from [Nexus Mods (mod #36)](https://www.nexusmods.com/subnautica2/mods/36), then use **+ Install ZIP** in the Library tab. Tidekeeper detects the UE4SS archive automatically and places the files in the correct location. The **Diagnostics** tool will warn you if UE4SS is missing or not set up correctly.
-
----
-
-## Setting Up Your Nexus API Key
-
-A Nexus API key lets Tidekeeper browse mods and check for updates on your behalf.
-
-1. Log in at [next.nexusmods.com/settings/api-keys](https://next.nexusmods.com/settings/api-keys)
-2. Copy your **Personal API Key**
-3. Open **Settings** in Tidekeeper and paste it in
 
 ---
 
@@ -133,7 +121,7 @@ Free code signing provided by [SignPath.io](https://signpath.io), certificate by
 - Maintainer and approver: [ToobsTube](https://github.com/ToobsTube)
 
 **Privacy policy:**
-This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it. Tidekeeper communicates with the [Nexus Mods API](https://www.nexusmods.com) on behalf of the user using an API key they provide; no data is sent to any servers operated by this project.
+This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it. Tidekeeper communicates with the [Nexus Mods API](https://www.nexusmods.com) on behalf of the user; no data is sent to any servers operated by this project.
 
 ---
 
