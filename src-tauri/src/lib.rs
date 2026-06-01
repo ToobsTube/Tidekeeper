@@ -2417,8 +2417,16 @@ async fn install_update(app: AppHandle) -> Result<(), String> {
     let nsis_str = nsis_path.to_string_lossy().replace('\'', "''");
     let exe_str = our_exe.to_string_lossy().replace('\'', "''");
     let script = format!(
-        "Start-Sleep -Seconds 2\r\nStart-Process -FilePath '{}' -ArgumentList '/S' -Wait\r\nStart-Process -FilePath '{}'\r\n",
-        nsis_str, exe_str
+        "$log = \"$env:TEMP\\tidekeeper_update_log.txt\"\r\n\
+        \"$(Get-Date): started\" | Out-File $log -Append\r\n\
+        Start-Sleep -Seconds 3\r\n\
+        Unblock-File -Path '{}' -ErrorAction SilentlyContinue\r\n\
+        Start-Process -FilePath '{}' -ArgumentList '/S' -Wait -ErrorAction SilentlyContinue\r\n\
+        \"$(Get-Date): nsis done\" | Out-File $log -Append\r\n\
+        Start-Sleep -Seconds 1\r\n\
+        Start-Process -FilePath '{}' -ErrorAction SilentlyContinue\r\n\
+        \"$(Get-Date): relaunch attempted\" | Out-File $log -Append\r\n",
+        nsis_str, nsis_str, exe_str
     );
     fs::write(&ps_path, &script).map_err(|e| e.to_string())?;
 
