@@ -108,7 +108,7 @@ This is useful for multiplayer — everyone can run the same mods without manual
 - [x] Config file access — open mod config files directly from the Library
 - [x] File integrity verification — check that all installed mod files are still present
 - [ ] Appear in the Nexus Mods mod manager dropdown (NXM registration pending approval)
-- [ ] Nexus account sign-in (replaces manual API key — pending Nexus approval)
+- [ ] Nexus account sign-in (pending Nexus OAuth approval)
 - [ ] Support for multiple game installations (e.g. experimental vs live branch)
 
 ---
