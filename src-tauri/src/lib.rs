@@ -21,6 +21,16 @@ pub struct Config {
     pub profiles: Option<HashMap<String, Vec<String>>>,
     pub active_profile: Option<String>,
     pub download_dir: Option<String>,
+    pub environments: Option<Vec<GameEnvironment>>,
+    pub active_environment_id: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct GameEnvironment {
+    pub id: String,
+    pub name: String,
+    pub mods_folder: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]
@@ -171,7 +181,20 @@ fn save_config_inner(app: &AppHandle, config: &Config) -> Result<(), String> {
 
 #[tauri::command]
 fn get_config(app: AppHandle) -> Option<Config> {
-    load_config(&app)
+    let mut cfg = load_config(&app)?;
+    // Migrate: if no environments yet, create one from the existing mods_folder
+    if cfg.environments.is_none() {
+        if let Some(ref folder) = cfg.mods_folder {
+            cfg.environments = Some(vec![GameEnvironment {
+                id: "main".to_string(),
+                name: "Main Install".to_string(),
+                mods_folder: folder.clone(),
+            }]);
+            cfg.active_environment_id = Some("main".to_string());
+            let _ = save_config_inner(&app, &cfg);
+        }
+    }
+    Some(cfg)
 }
 
 #[tauri::command]
@@ -182,6 +205,57 @@ fn save_config(app: AppHandle, config: Config) -> Result<(), String> {
 #[tauri::command]
 fn validate_folder(path: String) -> bool {
     PathBuf::from(&path).is_dir()
+}
+
+#[tauri::command]
+fn list_environments(app: AppHandle) -> Vec<GameEnvironment> {
+    load_config(&app)
+        .and_then(|c| c.environments)
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+fn add_environment(app: AppHandle, name: String, mods_folder: String) -> Result<GameEnvironment, String> {
+    if !PathBuf::from(&mods_folder).is_dir() {
+        return Err("Folder not found".into());
+    }
+    let mut cfg = load_config(&app).unwrap_or_default();
+    let id = format!("env_{}", std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis());
+    let env = GameEnvironment { id, name, mods_folder };
+    cfg.environments.get_or_insert_with(Vec::new).push(env.clone());
+    save_config_inner(&app, &cfg)?;
+    Ok(env)
+}
+
+#[tauri::command]
+fn remove_environment(app: AppHandle, id: String) -> Result<(), String> {
+    let mut cfg = load_config(&app).unwrap_or_default();
+    if cfg.active_environment_id.as_deref() == Some(&id) {
+        return Err("Cannot remove the active environment".into());
+    }
+    let envs = cfg.environments.get_or_insert_with(Vec::new);
+    if envs.len() <= 1 {
+        return Err("Cannot remove the only environment".into());
+    }
+    envs.retain(|e| e.id != id);
+    save_config_inner(&app, &cfg)?;
+    Ok(())
+}
+
+#[tauri::command]
+fn switch_environment(app: AppHandle, id: String) -> Result<Config, String> {
+    let mut cfg = load_config(&app).unwrap_or_default();
+    let env = cfg.environments.as_ref()
+        .and_then(|envs| envs.iter().find(|e| e.id == id))
+        .ok_or("Environment not found")?
+        .clone();
+    cfg.active_environment_id = Some(id);
+    cfg.mods_folder = Some(env.mods_folder);
+    save_config_inner(&app, &cfg)?;
+    Ok(cfg)
 }
 
 #[tauri::command]
@@ -2575,6 +2649,10 @@ pub fn run() {
             get_ue4ss_log,
             check_for_update,
             install_update,
+            list_environments,
+            add_environment,
+            remove_environment,
+            switch_environment,
         ])
         .run(tauri::generate_context!())
         .expect("error running Tidekeeper");

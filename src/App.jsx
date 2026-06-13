@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { open } from '@tauri-apps/plugin-dialog';
 import TitleBar from './components/TitleBar';
 import Sidebar from './components/Sidebar';
 import SetupView from './views/SetupView';
@@ -22,19 +23,78 @@ function NxmBanner({ notif, onDismiss }) {
   );
 }
 
+function AddEnvironmentDialog({ onSave, onCancel }) {
+  const [name, setName] = useState('');
+  const [folder, setFolder] = useState('');
+  const [error, setError] = useState(null);
+  const [saving, setSaving] = useState(false);
+
+  async function browseFolder() {
+    const selected = await open({ directory: true, title: 'Select UE4SS Mods Folder' });
+    if (selected) setFolder(selected);
+  }
+
+  async function handleSave() {
+    if (!name.trim()) { setError('Enter a name for this environment.'); return; }
+    if (!folder.trim()) { setError('Select a mods folder.'); return; }
+    setSaving(true);
+    try {
+      const env = await invoke('add_environment', { name: name.trim(), modsFolder: folder.trim() });
+      onSave(env);
+    } catch (e) {
+      setError(String(e));
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="modal-overlay">
+      <div className="modal-box">
+        <h3 style={{marginBottom:'16px'}}>Add Environment</h3>
+        <label className="settings-hint" style={{display:'block', marginBottom:'4px'}}>Name</label>
+        <input
+          className="input"
+          placeholder="e.g. Test Install"
+          value={name}
+          onChange={e => setName(e.target.value)}
+          autoFocus
+          style={{width:'100%', marginBottom:'12px'}}
+        />
+        <label className="settings-hint" style={{display:'block', marginBottom:'4px'}}>UE4SS Mods Folder</label>
+        <div className="input-row" style={{marginBottom:'16px'}}>
+          <input className="input mono" value={folder} onChange={e => setFolder(e.target.value)} spellCheck={false} />
+          <button className="btn-ghost" onClick={browseFolder}>Browse</button>
+        </div>
+        {error && <p style={{color:'var(--error)', fontSize:'12px', marginBottom:'12px'}}>{error}</p>}
+        <div style={{display:'flex', gap:'8px', justifyContent:'flex-end'}}>
+          <button className="btn-ghost sm" onClick={onCancel}>Cancel</button>
+          <button className="btn-primary sm" onClick={handleSave} disabled={saving}>
+            {saving ? 'Adding…' : 'Add'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [config, setConfig] = useState(null);
   const [ready, setReady] = useState(false);
   const [tab, setTab] = useState('discover');
   const [nxmNotif, setNxmNotif] = useState(null);
-  const [updateInfo, setUpdateInfo] = useState(null); // null | { available, version, notes }
+  const [updateInfo, setUpdateInfo] = useState(null);
   const [isPremium, setIsPremium] = useState(false);
+  const [environments, setEnvironments] = useState([]);
+  const [activeEnvId, setActiveEnvId] = useState(null);
+  const [showAddEnv, setShowAddEnv] = useState(false);
 
   useEffect(() => {
     invoke('get_config')
       .then(cfg => {
         setConfig(cfg);
         setReady(true);
+        if (cfg?.environments) setEnvironments(cfg.environments);
+        if (cfg?.activeEnvironmentId) setActiveEnvId(cfg.activeEnvironmentId);
         invoke('check_for_update').then(info => setUpdateInfo(info)).catch(() => {});
         if (cfg?.nexusApiKey) {
           invoke('validate_nexus_key').then(info => setIsPremium(info.isPremium)).catch(() => {});
@@ -56,7 +116,31 @@ export default function App() {
     setUpdateInfo(info);
   }
 
-  // Listen for NXM download events from Rust
+  async function handleSwitchEnv(id) {
+    try {
+      const cfg = await invoke('switch_environment', { id });
+      setConfig(cfg);
+      setActiveEnvId(id);
+    } catch (e) {
+      alert(`Failed to switch environment: ${e}`);
+    }
+  }
+
+  async function handleRemoveEnv(id) {
+    if (!confirm('Remove this environment? This does not delete any game files.')) return;
+    try {
+      await invoke('remove_environment', { id });
+      setEnvironments(prev => prev.filter(e => e.id !== id));
+    } catch (e) {
+      alert(String(e));
+    }
+  }
+
+  function handleEnvAdded(env) {
+    setEnvironments(prev => [...prev, env]);
+    setShowAddEnv(false);
+  }
+
   useEffect(() => {
     let unlistenStarted, unlistenDone, unlistenError;
 
@@ -73,7 +157,6 @@ export default function App() {
       setNxmNotif({ type: 'error', text: `Install failed: ${e.payload}` });
     }).then(fn => { unlistenError = fn; });
 
-    // Handle NXM link if app was launched by clicking one
     invoke('get_pending_nxm').then(url => {
       if (url) invoke('handle_nxm', { nxmUrl: url }).catch(e => {
         setNxmNotif({ type: 'error', text: `Install failed: ${e}` });
@@ -93,8 +176,20 @@ export default function App() {
 
   return (
     <div className="app">
-      <TitleBar />
+      <TitleBar
+        environments={environments}
+        activeEnvId={activeEnvId}
+        onSwitch={handleSwitchEnv}
+        onAddEnvironment={() => setShowAddEnv(true)}
+        onRemoveEnvironment={handleRemoveEnv}
+      />
       <NxmBanner notif={nxmNotif} onDismiss={() => setNxmNotif(null)} />
+      {showAddEnv && (
+        <AddEnvironmentDialog
+          onSave={handleEnvAdded}
+          onCancel={() => setShowAddEnv(false)}
+        />
+      )}
       <div className="app-body">
         {needsSetup ? (
           <SetupView onComplete={cfg => { setConfig(cfg); setTab('library'); }} />
