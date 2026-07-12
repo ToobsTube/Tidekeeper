@@ -51,10 +51,12 @@ export default function TitleBar({ environments = [], activeEnvId, onSwitch, onA
                   </div>
                 ))}
                 <div className="env-add" onClick={() => { setOpen(false); onAddEnvironment(); }}>
-                  + Add Environment
+                  <span>+ Add Environment</span>
+                  <span className="env-add-hint">Point to an existing SN2 install</span>
                 </div>
                 <div className="env-add" onClick={() => { setOpen(false); onSteamInstall?.(); }}>
-                  &#x2193; Download via Steam
+                  <span>&#x2193; Download via Steam</span>
+                  <span className="env-add-hint">Downloads SN2 and adds it as a new environment</span>
                 </div>
               </div>
             )}
