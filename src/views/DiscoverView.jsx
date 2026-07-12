@@ -182,7 +182,7 @@ export default function DiscoverView({ config, onTabChange, isPremium }) {
   const [selected, setSelected]   = useState(null);
   const [detailMod, setDetailMod] = useState(null);
 
-  const hasApiKey = !!config?.nexusApiKey;
+  const isConnected = !!config?.nexusToken || !!config?.nexusApiKey;
 
   const [offset, setOffset]       = useState(0);
   const [total, setTotal]         = useState(null);
@@ -194,13 +194,6 @@ export default function DiscoverView({ config, onTabChange, isPremium }) {
                    : category === 'updated' ? 'updatedAt'
                    : 'endorsements';
   const sortDir = 'DESC';
-
-  const gqlHeaders = {
-    'Content-Type': 'application/json',
-    apikey: config.nexusApiKey,
-    'Application-Name': 'Tidekeeper',
-    'Application-Version': '0.1.0',
-  };
 
   const buildQuery = (off, count) => `query {
     mods(
@@ -233,13 +226,7 @@ export default function DiscoverView({ config, onTabChange, isPremium }) {
     else setLoadingMore(true);
 
     try {
-      const r = await fetch('https://api.nexusmods.com/v2/graphql', {
-        method: 'POST',
-        headers: gqlHeaders,
-        body: JSON.stringify({ query: buildQuery(off, PAGE) }),
-      });
-      if (!r.ok) throw new Error(`Nexus API error: ${r.status}`);
-      const json = await r.json();
+      const json = await invoke('nexus_graphql', { query: buildQuery(off, PAGE) });
       if (json.errors) throw new Error(json.errors[0]?.message ?? 'GraphQL error');
       const mapped = (json.data?.mods?.nodes ?? []).map(mapMod);
       setTotal(json.data?.mods?.totalCount ?? null);
@@ -259,11 +246,8 @@ export default function DiscoverView({ config, onTabChange, isPremium }) {
     try {
       // Fetch up to 3 pages in parallel to cover the SN2 catalogue
       const pages = await Promise.all([0, PAGE, PAGE * 2].map(off =>
-        fetch('https://api.nexusmods.com/v2/graphql', {
-          method: 'POST',
-          headers: gqlHeaders,
-          body: JSON.stringify({ query: buildQuery(off, PAGE) }),
-        }).then(r => r.json()).then(j => (j.data?.mods?.nodes ?? []).map(mapMod))
+        invoke('nexus_graphql', { query: buildQuery(off, PAGE) })
+          .then(j => (j.data?.mods?.nodes ?? []).map(mapMod))
       ));
       const all = pages.flat();
       const q = term.toLowerCase();
@@ -281,13 +265,13 @@ export default function DiscoverView({ config, onTabChange, isPremium }) {
   };
 
   useEffect(() => {
-    if (source !== 'nexus' || !hasApiKey) return;
+    if (source !== 'nexus' || !isConnected) return;
     setOffset(0); setTotal(null);
     fetchMods(0, true);
-  }, [source, category, hasApiKey]);
+  }, [source, category, isConnected]);
 
   useEffect(() => {
-    if (source !== 'nexus' || !hasApiKey) return;
+    if (source !== 'nexus' || !isConnected) return;
     if (activeSearch) {
       fetchSearch(activeSearch);
     } else {
@@ -328,7 +312,7 @@ export default function DiscoverView({ config, onTabChange, isPremium }) {
           </button>
         </div>
 
-        {source === 'nexus' && hasApiKey && (
+        {source === 'nexus' && isConnected && (
           <>
             <div className="cat-toggle">
               {['trending','latest','updated'].map(c => (
@@ -366,7 +350,7 @@ export default function DiscoverView({ config, onTabChange, isPremium }) {
             </svg>
             <p>Thunderstore doesn't have a Subnautica 2 community yet.<br/>Check back after the game launches fully.</p>
           </div>
-        ) : !hasApiKey ? (
+        ) : !isConnected ? (
           <div className="nexus-prompt">
             <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" style={{color:'var(--text3)'}}>
               <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>

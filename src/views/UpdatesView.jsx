@@ -8,7 +8,7 @@ export default function UpdatesView({ config, onTabChange }) {
   const [error, setError]       = useState(null);
   const [updating, setUpdating] = useState({}); // modPath → true while installing
 
-  const hasApiKey  = !!config?.nexusApiKey;
+  const isConnected = !!config?.nexusToken || !!config?.nexusApiKey;
   const isPremium  = !!config?.nexusIsPremium;
 
   async function doDirectUpdate(s) {
@@ -51,7 +51,7 @@ export default function UpdatesView({ config, onTabChange }) {
     <>
       <div className="pane-header">
         <span className="pane-title">Updates</span>
-        {hasApiKey && (
+        {isConnected && (
           <button className="btn-ghost sm" onClick={checkUpdates} disabled={loading}>
             {loading ? 'Checking…' : statuses !== null ? 'Re-check' : 'Check for Updates'}
           </button>
@@ -59,7 +59,7 @@ export default function UpdatesView({ config, onTabChange }) {
       </div>
 
       <div className="pane-scroll">
-        {!hasApiKey ? (
+        {!isConnected ? (
           <div className="nexus-prompt">
             <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" style={{color:'var(--text3)'}}>
               <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>

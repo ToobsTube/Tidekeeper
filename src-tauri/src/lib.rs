@@ -2414,6 +2414,25 @@ fn nexus_oauth_logout(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+// ── Nexus GraphQL ────────────────────────────────────────────────────────────
+
+#[tauri::command]
+async fn nexus_graphql(app: AppHandle, query: String) -> Result<serde_json::Value, String> {
+    let current = app.package_info().version.to_string();
+    let (auth_header, auth_value) = get_nexus_auth(&app).await?;
+    let client = Client::new();
+    let resp: serde_json::Value = client
+        .post("https://api.nexusmods.com/v2/graphql")
+        .header(auth_header.as_str(), auth_value.as_str())
+        .header("Content-Type", "application/json")
+        .header("Application-Name", "Tidekeeper")
+        .header("Application-Version", &current)
+        .json(&serde_json::json!({ "query": query }))
+        .send().await.map_err(|e| e.to_string())?
+        .json().await.map_err(|e| e.to_string())?;
+    Ok(resp)
+}
+
 // ── App updater ──────────────────────────────────────────────────────────────
 
 #[derive(Serialize)]
@@ -2852,6 +2871,7 @@ pub fn run() {
             get_log,
             clear_log,
             get_ue4ss_log,
+            nexus_graphql,
             check_for_update,
             install_update,
             list_environments,
