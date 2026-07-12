@@ -326,9 +326,6 @@ export default function DiscoverView({ config, onTabChange, isPremium }) {
           <button className={`source-btn${source === 'nexus' ? ' active' : ''}`} onClick={() => setSource('nexus')}>
             Nexus Mods
           </button>
-          <button className={`source-btn${source === 'thunderstore' ? ' active' : ''}`} onClick={() => setSource('thunderstore')}>
-            Thunderstore
-          </button>
         </div>
 
         {source === 'nexus' && hasApiKey && (

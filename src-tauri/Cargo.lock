@@ -4369,7 +4369,7 @@ dependencies = [
 
 [[package]]
 name = "tidekeeper"
-version = "0.5.25"
+version = "0.5.26"
 dependencies = [
  "base64 0.22.1",
  "rand",

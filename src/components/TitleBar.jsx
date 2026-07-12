@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 
-export default function TitleBar({ environments = [], activeEnvId, onSwitch, onAddEnvironment, onRemoveEnvironment }) {
+export default function TitleBar({ environments = [], activeEnvId, onSwitch, onAddEnvironment, onRemoveEnvironment, onSteamInstall }) {
   const [maximized, setMaximized] = useState(false);
   const [open, setOpen] = useState(false);
   const dropdownRef = useRef(null);
@@ -52,6 +52,9 @@ export default function TitleBar({ environments = [], activeEnvId, onSwitch, onA
                 ))}
                 <div className="env-add" onClick={() => { setOpen(false); onAddEnvironment(); }}>
                   + Add Environment
+                </div>
+                <div className="env-add" onClick={() => { setOpen(false); onSteamInstall?.(); }}>
+                  &#x2193; Download via Steam
                 </div>
               </div>
             )}

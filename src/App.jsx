@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
@@ -77,6 +77,255 @@ function AddEnvironmentDialog({ onSave, onCancel }) {
   );
 }
 
+function SteamInstallDialog({ onDone, onCancel }) {
+  const [step, setStep] = useState('setup');
+  // step: 'setup' | 'installing-depot' | 'running' | 'needs-password' | 'needs-steam-guard' | 'done' | 'error'
+  const [username, setUsername] = useState('');
+  const [installPath, setInstallPath] = useState('');
+  const [log, setLog] = useState([]);
+  const [inputVal, setInputVal] = useState('');
+  const [envName, setEnvName] = useState('Test Install');
+  const [errorMsg, setErrorMsg] = useState('');
+  const [hasDepot, setHasDepot] = useState(null);
+  const logRef = useRef(null);
+
+  useEffect(() => {
+    invoke('check_depot_downloader').then(setHasDepot);
+  }, []);
+
+  useEffect(() => {
+    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+  }, [log]);
+
+  useEffect(() => {
+    const unlisteners = [];
+    const addLine = line => setLog(prev => [...prev, line]);
+
+    listen('depot-progress', e => addLine(e.payload)).then(fn => unlisteners.push(fn));
+    listen('depot-needs-password', e => {
+      addLine(e.payload);
+      setStep('needs-password');
+      setInputVal('');
+    }).then(fn => unlisteners.push(fn));
+    listen('depot-needs-steam-guard', e => {
+      addLine(e.payload);
+      setStep('needs-steam-guard');
+      setInputVal('');
+    }).then(fn => unlisteners.push(fn));
+    listen('depot-complete', () => setStep('done')).then(fn => unlisteners.push(fn));
+    listen('depot-error', e => {
+      setErrorMsg(e.payload);
+      setStep('error');
+    }).then(fn => unlisteners.push(fn));
+
+    return () => unlisteners.forEach(fn => fn?.());
+  }, []);
+
+  async function installDepot() {
+    setStep('installing-depot');
+    try {
+      await invoke('install_depot_downloader');
+      setHasDepot(true);
+      setStep('setup');
+    } catch (e) {
+      setErrorMsg(String(e));
+      setStep('error');
+    }
+  }
+
+  async function startDownload() {
+    setStep('running');
+    setLog([]);
+    try {
+      await invoke('steam_install_sn2', { username: username.trim(), installPath: installPath.trim() });
+    } catch (e) {
+      setErrorMsg(String(e));
+      setStep('error');
+    }
+  }
+
+  async function sendInput() {
+    const val = inputVal.trim();
+    if (!val) return;
+    try {
+      await invoke('depot_send_input', { text: val });
+      setLog(prev => [...prev, `> ${val}`]);
+      setInputVal('');
+      setStep('running');
+    } catch (e) {
+      setErrorMsg(String(e));
+    }
+  }
+
+  async function handleCancel() {
+    await invoke('depot_cancel').catch(() => {});
+    onCancel();
+  }
+
+  async function handleDone() {
+    if (!envName.trim()) return;
+    try {
+      const modsFolder = await invoke('create_mod_structure', { gameFolder: installPath.trim() });
+      const env = await invoke('add_environment', { name: envName.trim(), modsFolder });
+      onDone(env);
+    } catch (e) {
+      setErrorMsg(String(e));
+    }
+  }
+
+  async function browseInstallPath() {
+    const selected = await open({ directory: true, title: 'Choose installation folder' });
+    if (selected) setInstallPath(selected);
+  }
+
+  return (
+    <div className="modal-overlay">
+      <div className="modal-box" style={{ width: '500px', maxWidth: '90vw' }}>
+        <h3 style={{ marginBottom: '16px' }}>Download via Steam</h3>
+
+        {step === 'setup' && (
+          <>
+            {hasDepot === false && (
+              <div style={{ background: 'var(--bg2)', borderRadius: '6px', padding: '12px', marginBottom: '16px' }}>
+                <p style={{ fontSize: '13px', marginBottom: '10px' }}>
+                  Tidekeeper needs a small helper tool to download from Steam. It will be downloaded automatically.
+                </p>
+                <button className="btn-primary sm" onClick={installDepot}>Download helper tool</button>
+              </div>
+            )}
+            <label className="settings-hint" style={{ display: 'block', marginBottom: '4px' }}>Steam Username</label>
+            <input
+              className="input"
+              placeholder="Your Steam account name"
+              value={username}
+              onChange={e => setUsername(e.target.value)}
+              autoFocus
+              style={{ width: '100%', marginBottom: '12px' }}
+            />
+            <label className="settings-hint" style={{ display: 'block', marginBottom: '4px' }}>Install Folder</label>
+            <div className="input-row" style={{ marginBottom: '6px' }}>
+              <input className="input mono" value={installPath} onChange={e => setInstallPath(e.target.value)} spellCheck={false} />
+              <button className="btn-ghost" onClick={browseInstallPath}>Browse</button>
+            </div>
+            <p className="settings-hint" style={{ marginBottom: '16px' }}>
+              A fresh copy of Subnautica 2 will be downloaded here. You must own the game on Steam.
+            </p>
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+              <button className="btn-ghost sm" onClick={handleCancel}>Cancel</button>
+              <button
+                className="btn-primary sm"
+                onClick={startDownload}
+                disabled={!username.trim() || !installPath.trim() || hasDepot === false}
+              >
+                Start Download
+              </button>
+            </div>
+          </>
+        )}
+
+        {step === 'installing-depot' && (
+          <div style={{ textAlign: 'center', padding: '24px 0' }}>
+            <div className="nxm-spinner" style={{ margin: '0 auto 12px' }} />
+            <p>Downloading helper tool…</p>
+          </div>
+        )}
+
+        {(step === 'running' || step === 'needs-password' || step === 'needs-steam-guard') && (
+          <>
+            <div
+              ref={logRef}
+              style={{
+                background: 'var(--bg2)', borderRadius: '6px', padding: '10px',
+                height: '200px', overflowY: 'auto', fontFamily: 'monospace',
+                fontSize: '11px', marginBottom: '12px', whiteSpace: 'pre-wrap',
+                wordBreak: 'break-all',
+              }}
+            >
+              {log.map((l, i) => <div key={i}>{l}</div>)}
+              {step === 'running' && <div style={{ opacity: 0.4 }}>Downloading…</div>}
+            </div>
+
+            {step === 'needs-password' && (
+              <div style={{ marginBottom: '12px' }}>
+                <label className="settings-hint" style={{ display: 'block', marginBottom: '4px' }}>Steam Password</label>
+                <div className="input-row">
+                  <input
+                    type="password"
+                    className="input"
+                    value={inputVal}
+                    onChange={e => setInputVal(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && sendInput()}
+                    autoFocus
+                  />
+                  <button className="btn-primary sm" onClick={sendInput}>Send</button>
+                </div>
+              </div>
+            )}
+
+            {step === 'needs-steam-guard' && (
+              <div style={{ marginBottom: '12px' }}>
+                <label className="settings-hint" style={{ display: 'block', marginBottom: '4px' }}>Steam Guard Code</label>
+                <div className="input-row">
+                  <input
+                    className="input mono"
+                    placeholder="e.g. AB1CD"
+                    value={inputVal}
+                    onChange={e => setInputVal(e.target.value.toUpperCase())}
+                    onKeyDown={e => e.key === 'Enter' && sendInput()}
+                    autoFocus
+                    maxLength={8}
+                  />
+                  <button className="btn-primary sm" onClick={sendInput}>Send</button>
+                </div>
+              </div>
+            )}
+
+            {step === 'running' && (
+              <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                <button className="btn-ghost sm" onClick={handleCancel}>Cancel</button>
+              </div>
+            )}
+          </>
+        )}
+
+        {step === 'done' && (
+          <>
+            <p style={{ color: 'var(--accent)', marginBottom: '16px' }}>
+              Download complete! Give this install a name to add it as an environment.
+            </p>
+            <label className="settings-hint" style={{ display: 'block', marginBottom: '4px' }}>Environment Name</label>
+            <input
+              className="input"
+              placeholder="e.g. Test Install"
+              value={envName}
+              onChange={e => setEnvName(e.target.value)}
+              autoFocus
+              style={{ width: '100%', marginBottom: '16px' }}
+            />
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+              <button className="btn-ghost sm" onClick={handleCancel}>Cancel</button>
+              <button className="btn-primary sm" onClick={handleDone} disabled={!envName.trim()}>
+                Add to Tidekeeper
+              </button>
+            </div>
+          </>
+        )}
+
+        {step === 'error' && (
+          <>
+            <p style={{ color: 'var(--error)', marginBottom: '16px', fontSize: '13px' }}>
+              {errorMsg || 'Something went wrong.'}
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button className="btn-ghost sm" onClick={handleCancel}>Close</button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [config, setConfig] = useState(null);
   const [ready, setReady] = useState(false);
@@ -87,6 +336,7 @@ export default function App() {
   const [environments, setEnvironments] = useState([]);
   const [activeEnvId, setActiveEnvId] = useState(null);
   const [showAddEnv, setShowAddEnv] = useState(false);
+  const [showSteamInstall, setShowSteamInstall] = useState(false);
 
   useEffect(() => {
     invoke('get_config')
@@ -177,12 +427,19 @@ export default function App() {
         onSwitch={handleSwitchEnv}
         onAddEnvironment={() => setShowAddEnv(true)}
         onRemoveEnvironment={handleRemoveEnv}
+        onSteamInstall={() => setShowSteamInstall(true)}
       />
       <NxmBanner notif={nxmNotif} onDismiss={() => setNxmNotif(null)} />
       {showAddEnv && (
         <AddEnvironmentDialog
           onSave={handleEnvAdded}
           onCancel={() => setShowAddEnv(false)}
+        />
+      )}
+      {showSteamInstall && (
+        <SteamInstallDialog
+          onDone={env => { setEnvironments(prev => [...prev, env]); setShowSteamInstall(false); }}
+          onCancel={() => setShowSteamInstall(false)}
         />
       )}
       <div className="app-body">

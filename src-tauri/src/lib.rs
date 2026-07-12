@@ -2547,6 +2547,210 @@ async fn install_update(app: AppHandle, file_id: u64) -> Result<(), String> {
     std::process::exit(0);
 }
 
+// ── Steam install (DepotDownloader) ─────────────────────────────────────────
+
+#[derive(Default)]
+struct DepotState {
+    stdin: Mutex<Option<std::process::ChildStdin>>,
+    pid:   Mutex<Option<u32>>,
+}
+
+fn depot_tools_dir(app: &AppHandle) -> Option<PathBuf> {
+    app.path().app_data_dir().ok().map(|d| d.join("tools"))
+}
+
+fn find_depot_downloader(tools_dir: Option<&Path>) -> Option<PathBuf> {
+    // Check our auto-downloaded copy in app data first
+    if let Some(tools) = tools_dir {
+        let p = tools.join("DepotDownloader.exe");
+        if p.exists() { return Some(p); }
+    }
+    // Also check PATH for users who have it installed independently
+    if let Ok(out) = std::process::Command::new("where")
+        .arg("DepotDownloader")
+        .output()
+    {
+        if out.status.success() {
+            let s = String::from_utf8_lossy(&out.stdout);
+            if let Some(first) = s.lines().next() {
+                let p = PathBuf::from(first.trim());
+                if p.exists() { return Some(p); }
+            }
+        }
+    }
+    None
+}
+
+async fn download_depot_downloader(app: &AppHandle) -> Result<PathBuf, String> {
+    let tools_dir = depot_tools_dir(app).ok_or("Could not resolve app data dir")?;
+    fs::create_dir_all(&tools_dir).map_err(|e| e.to_string())?;
+    let dest = tools_dir.join("DepotDownloader.exe");
+
+    let client = Client::new();
+
+    // Fetch latest release info from GitHub
+    let release: serde_json::Value = client
+        .get("https://api.github.com/repos/SteamRE/DepotDownloader/releases/latest")
+        .header("User-Agent", "Tidekeeper")
+        .send().await.map_err(|e| format!("GitHub request failed: {}", e))?
+        .json().await.map_err(|e| format!("Failed to parse release info: {}", e))?;
+
+    // Find the Windows zip asset
+    let zip_url = release["assets"].as_array()
+        .ok_or("No assets found in GitHub release")?
+        .iter()
+        .filter_map(|a| a["browser_download_url"].as_str())
+        .find(|url| {
+            let u = url.to_lowercase();
+            u.contains("windows") && u.ends_with(".zip")
+        })
+        .ok_or("Could not find Windows zip in DepotDownloader release")?
+        .to_string();
+
+    // Download the zip
+    let bytes = client
+        .get(&zip_url)
+        .header("User-Agent", "Tidekeeper")
+        .send().await.map_err(|e| format!("Download failed: {}", e))?
+        .bytes().await.map_err(|e| format!("Download read failed: {}", e))?;
+
+    // Extract DepotDownloader.exe from the zip
+    let cursor = io::Cursor::new(bytes.as_ref());
+    let mut archive = zip::ZipArchive::new(cursor).map_err(|e| e.to_string())?;
+
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i).map_err(|e| e.to_string())?;
+        let lname = file.name().to_lowercase();
+        if lname == "depotdownloader.exe" || lname.ends_with("/depotdownloader.exe") {
+            let mut out = fs::File::create(&dest).map_err(|e| e.to_string())?;
+            io::copy(&mut file, &mut out).map_err(|e| e.to_string())?;
+            return Ok(dest);
+        }
+    }
+
+    Err("DepotDownloader.exe not found in the downloaded zip".into())
+}
+
+fn classify_depot_line(line: &str) -> &'static str {
+    let lower = line.to_lowercase();
+    if lower.contains("password") && !lower.contains("remember") && (lower.ends_with(':') || lower.ends_with(": ")) {
+        "depot-needs-password"
+    } else if lower.contains("steam guard") || lower.contains("two-factor") || lower.contains("enter the current") {
+        "depot-needs-steam-guard"
+    } else {
+        "depot-progress"
+    }
+}
+
+#[tauri::command]
+fn check_depot_downloader(app: AppHandle) -> bool {
+    let tools = depot_tools_dir(&app);
+    find_depot_downloader(tools.as_deref()).is_some()
+}
+
+#[tauri::command]
+async fn install_depot_downloader(app: AppHandle) -> Result<(), String> {
+    download_depot_downloader(&app).await?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn steam_install_sn2(
+    app: AppHandle,
+    username: String,
+    install_path: String,
+) -> Result<(), String> {
+    let tools = depot_tools_dir(&app);
+    let dd_path = find_depot_downloader(tools.as_deref())
+        .ok_or("DepotDownloader not found. Use the Install button first.")?;
+
+    fs::create_dir_all(&install_path).map_err(|e| e.to_string())?;
+
+    let mut child = std::process::Command::new(&dd_path)
+        .args([
+            "-app", "1962700",
+            "-username", username.trim(),
+            "-dir", install_path.trim(),
+            "-remember-password",
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to launch DepotDownloader: {}", e))?;
+
+    let stdin  = child.stdin.take().ok_or("Could not open stdin pipe")?;
+    let stdout = child.stdout.take().ok_or("Could not open stdout pipe")?;
+    let stderr = child.stderr.take().ok_or("Could not open stderr pipe")?;
+    let pid    = child.id();
+
+    {
+        let state = app.state::<DepotState>();
+        *state.stdin.lock().map_err(|_| "lock error")? = Some(stdin);
+        *state.pid.lock().map_err(|_| "lock error")?   = Some(pid);
+    }
+
+    let app_out = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        use std::io::{BufRead, BufReader};
+        for line in BufReader::new(stdout).lines().flatten() {
+            let _ = app_out.emit(classify_depot_line(&line), &line);
+        }
+    });
+
+    let app_err = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        use std::io::{BufRead, BufReader};
+        for line in BufReader::new(stderr).lines().flatten() {
+            let _ = app_err.emit(classify_depot_line(&line), &line);
+        }
+    });
+
+    let app_wait = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let result = child.wait();
+        {
+            let state = app_wait.state::<DepotState>();
+            if let Ok(mut lock) = state.stdin.lock() { *lock = None; };
+            if let Ok(mut lock) = state.pid.lock()   { *lock = None; };
+        }
+        match result {
+            Ok(s) if s.success() => { let _ = app_wait.emit("depot-complete", ()); }
+            Ok(s) => { let _ = app_wait.emit("depot-error", format!("DepotDownloader exited with code {:?}", s.code())); }
+            Err(e) => { let _ = app_wait.emit("depot-error", e.to_string()); }
+        }
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
+fn depot_send_input(app: AppHandle, text: String) -> Result<(), String> {
+    use std::io::Write;
+    let state = app.state::<DepotState>();
+    let mut lock = state.stdin.lock().map_err(|_| "lock error")?;
+    match lock.as_mut() {
+        Some(stdin) => {
+            stdin.write_all(format!("{}\n", text.trim()).as_bytes())
+                .map_err(|e| format!("Write failed: {}", e))?;
+            stdin.flush().map_err(|e| format!("Flush failed: {}", e))
+        }
+        None => Err("No active Steam download".into()),
+    }
+}
+
+#[tauri::command]
+fn depot_cancel(app: AppHandle) {
+    let state = app.state::<DepotState>();
+    let pid = state.pid.lock().ok().and_then(|mut l| l.take());
+    if let Ok(mut lock) = state.stdin.lock() { *lock = None; }
+    if let Some(pid) = pid {
+        let _ = std::process::Command::new("taskkill")
+            .args(["/F", "/PID", &pid.to_string()])
+            .status();
+    }
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -2576,6 +2780,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_deep_link::init())
         .manage(NxmQueue::default())
+        .manage(DepotState::default())
         .setup(|app| {
             #[cfg(debug_assertions)]
             app.deep_link().register("nxm").ok();
@@ -2653,6 +2858,11 @@ pub fn run() {
             add_environment,
             remove_environment,
             switch_environment,
+            check_depot_downloader,
+            install_depot_downloader,
+            steam_install_sn2,
+            depot_send_input,
+            depot_cancel,
         ])
         .run(tauri::generate_context!())
         .expect("error running Tidekeeper");
