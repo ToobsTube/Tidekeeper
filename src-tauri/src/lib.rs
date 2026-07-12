@@ -1183,14 +1183,14 @@ pub struct NexusUserInfo {
 
 #[tauri::command]
 async fn validate_nexus_key(app: AppHandle) -> Result<NexusUserInfo, String> {
-    let config = load_config(&app).ok_or("No config")?;
-    let api_key = config.nexus_api_key.ok_or("No API key configured")?;
+    let current = app.package_info().version.to_string();
+    let (auth_header, auth_value) = get_nexus_auth(&app).await?;
     let client = Client::new();
     let resp: serde_json::Value = client
         .get("https://api.nexusmods.com/v1/users/validate.json")
-        .header("apikey", &api_key)
+        .header(auth_header.as_str(), auth_value.as_str())
         .header("Application-Name", "Tidekeeper")
-        .header("Application-Version", "0.4.0")
+        .header("Application-Version", &current)
         .send().await.map_err(|e| e.to_string())?
         .json().await.map_err(|e| e.to_string())?;
     Ok(NexusUserInfo {

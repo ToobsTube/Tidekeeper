@@ -96,18 +96,13 @@ export default function App() {
         if (cfg?.environments) setEnvironments(cfg.environments);
         if (cfg?.activeEnvironmentId) setActiveEnvId(cfg.activeEnvironmentId);
         invoke('check_for_update').then(info => setUpdateInfo(info)).catch(() => {});
-        if (cfg?.nexusApiKey) {
-          invoke('validate_nexus_key').then(info => setIsPremium(info.isPremium)).catch(() => {});
-        }
+        invoke('nexus_get_auth_status').then(status => setIsPremium(status.isPremium)).catch(() => {});
       })
       .catch(() => setReady(true));
   }, []);
 
   function handleConfigChange(cfg) {
     setConfig(cfg);
-    if (cfg?.nexusApiKey) {
-      invoke('validate_nexus_key').then(info => setIsPremium(info.isPremium)).catch(() => {});
-    }
   }
 
   async function recheckUpdate() {
