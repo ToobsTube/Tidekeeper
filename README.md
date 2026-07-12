@@ -132,4 +132,6 @@ npm run tauri dev
 
 ## License
 
+This project is licensed under the [GNU General Public License v3.0](LICENSE). You are free to use, modify, and distribute it, but any distributed version must also be open source under the same license.
+
 This project is not affiliated with Unknown Worlds Entertainment or Nexus Mods.
