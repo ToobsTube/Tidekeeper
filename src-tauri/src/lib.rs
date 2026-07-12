@@ -941,6 +941,40 @@ fn find_subnautica2() -> Option<String> {
 // Creates the UE4SS/Mods folder structure inside the given game folder and
 // returns the mods folder path. Accepts either the Steam install folder
 // (steamapps/common/Subnautica2) or the inner game folder directly.
+fn clone_dir_recursive(app: &AppHandle, src: &Path, dst: &Path, base: &Path) -> Result<(), String> {
+    fs::create_dir_all(dst).map_err(|e| e.to_string())?;
+    for entry in fs::read_dir(src).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if src_path.is_dir() {
+            clone_dir_recursive(app, &src_path, &dst_path, base)?;
+        } else {
+            let rel = src_path.strip_prefix(base)
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|_| entry.file_name().to_string_lossy().into_owned());
+            let _ = app.emit("clone-progress", &rel);
+            fs::copy(&src_path, &dst_path)
+                .map_err(|e| format!("Failed to copy {}: {}", rel, e))?;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn clone_sn2_install(app: AppHandle, source: String, destination: String) -> Result<(), String> {
+    let src = PathBuf::from(&source);
+    if !src.exists() { return Err("Source folder not found".into()); }
+    let dst = PathBuf::from(&destination);
+    tauri::async_runtime::spawn_blocking(move || {
+        match clone_dir_recursive(&app, &src, &dst, &src) {
+            Ok(()) => { let _ = app.emit("clone-complete", ()); }
+            Err(e) => { let _ = app.emit("clone-error", e); }
+        }
+    }).await.map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 #[tauri::command]
 fn create_mod_structure(game_folder: String) -> Result<String, String> {
     let base = PathBuf::from(&game_folder);
@@ -2575,7 +2609,7 @@ struct DepotState {
 }
 
 fn depot_tools_dir(app: &AppHandle) -> Option<PathBuf> {
-    app.path().app_data_dir().ok().map(|d| d.join("tools"))
+    app.path().app_local_data_dir().ok().map(|d| d.join("tools"))
 }
 
 fn find_depot_downloader(tools_dir: Option<&Path>) -> Option<PathBuf> {
@@ -2621,9 +2655,9 @@ async fn download_depot_downloader(app: &AppHandle) -> Result<PathBuf, String> {
         .filter_map(|a| a["browser_download_url"].as_str())
         .find(|url| {
             let u = url.to_lowercase();
-            u.contains("windows") && u.ends_with(".zip")
+            u.contains("windows-x64") && u.ends_with(".zip")
         })
-        .ok_or("Could not find Windows zip in DepotDownloader release")?
+        .ok_or("Could not find DepotDownloader windows-x64 zip in release")?
         .to_string();
 
     // Download the zip
@@ -2654,6 +2688,8 @@ fn classify_depot_line(line: &str) -> &'static str {
     let lower = line.to_lowercase();
     if lower.contains("password") && !lower.contains("remember") && (lower.ends_with(':') || lower.ends_with(": ")) {
         "depot-needs-password"
+    } else if (lower.contains("steam guard") || lower.contains("two-factor")) && lower.contains("confirm your sign in") {
+        "depot-needs-steam-approval"
     } else if lower.contains("steam guard") || lower.contains("two-factor") || lower.contains("enter the current") {
         "depot-needs-steam-guard"
     } else {
@@ -2677,6 +2713,7 @@ async fn install_depot_downloader(app: AppHandle) -> Result<(), String> {
 async fn steam_install_sn2(
     app: AppHandle,
     username: String,
+    password: String,
     install_path: String,
 ) -> Result<(), String> {
     let tools = depot_tools_dir(&app);
@@ -2689,8 +2726,10 @@ async fn steam_install_sn2(
         .args([
             "-app", "1962700",
             "-username", username.trim(),
+            "-password", password.trim(),
             "-dir", install_path.trim(),
             "-remember-password",
+            "-max-downloads", "1",
         ])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -2878,6 +2917,7 @@ pub fn run() {
             add_environment,
             remove_environment,
             switch_environment,
+            clone_sn2_install,
             check_depot_downloader,
             install_depot_downloader,
             steam_install_sn2,

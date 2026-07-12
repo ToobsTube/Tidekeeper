@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 
-export default function TitleBar({ environments = [], activeEnvId, onSwitch, onAddEnvironment, onRemoveEnvironment, onSteamInstall }) {
+export default function TitleBar({ environments = [], activeEnvId, onSwitch, onAddEnvironment, onRemoveEnvironment }) {
   const [maximized, setMaximized] = useState(false);
   const [open, setOpen] = useState(false);
   const dropdownRef = useRef(null);
@@ -51,12 +51,7 @@ export default function TitleBar({ environments = [], activeEnvId, onSwitch, onA
                   </div>
                 ))}
                 <div className="env-add" onClick={() => { setOpen(false); onAddEnvironment(); }}>
-                  <span>+ Add Environment</span>
-                  <span className="env-add-hint">Point to an existing SN2 install</span>
-                </div>
-                <div className="env-add" onClick={() => { setOpen(false); onSteamInstall?.(); }}>
-                  <span>&#x2193; Download via Steam</span>
-                  <span className="env-add-hint">Downloads SN2 and adds it as a new environment</span>
+                  + Add Environment
                 </div>
               </div>
             )}

@@ -171,15 +171,8 @@ html, body, #root {
   border-top: 1px solid var(--border);
   cursor: pointer;
   transition: color 0.1s;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
 }
 .env-add:hover { color: var(--accent); }
-.env-add-hint {
-  font-size: 10px;
-  opacity: 0.6;
-}
 
 /* ── Modal ─────────────────────────────────────────────── */
 .modal-overlay {
