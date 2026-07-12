@@ -47,7 +47,7 @@ The UE4SS Mods folder is typically located at:
 C:\Program Files (x86)\Steam\steamapps\common\Subnautica2\Binaries\Win64\ue4ss\Mods
 ```
 
-> **Note on antivirus warnings:** A couple of scanners flag Tidekeeper because it is not yet code-signed. This is a false positive — all major consumer antivirus engines report it as clean. The full source code is in this repository for anyone who wants to verify it. We are in the process of applying for code signing through the [SignPath Foundation](https://signpath.org) open-source program, which should resolve these flags once approved. If Windows SmartScreen warns you on install, click "More info" → "Run anyway".
+> **Note on antivirus warnings:** The installer is currently unsigned. Some antivirus tools may flag it as suspicious — this is a false positive common to self-built Tauri apps. All major consumer antivirus engines report it as clean, and the full source code is in this repository for anyone who wants to verify it. If Windows SmartScreen warns you on install, click "More info" → "Run anyway".
 
 ### Installing UE4SS
 
@@ -113,14 +113,8 @@ This is useful for multiplayer — everyone can run the same mods without manual
 
 ---
 
-## Code signing policy
+## Privacy policy
 
-Free code signing provided by [SignPath.io](https://signpath.io), certificate by [SignPath Foundation](https://signpath.org).
-
-**Team roles:**
-- Maintainer and approver: [ToobsTube](https://github.com/ToobsTube)
-
-**Privacy policy:**
 This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it. Tidekeeper communicates with the [Nexus Mods API](https://www.nexusmods.com) on behalf of the user; no data is sent to any servers operated by this project.
 
 ---
