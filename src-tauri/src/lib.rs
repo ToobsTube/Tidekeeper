@@ -807,12 +807,13 @@ async fn peek_zip_name(app: AppHandle, zip_path: String) -> Result<ZipInfo, Stri
     // If we detected a Nexus mod ID, resolve the display name from the API
     if let Some(mod_id) = info.nexus_mod_id {
         if let Ok((auth_header, auth_value)) = get_nexus_auth(&app).await {
+            let app_version = app.package_info().version.to_string();
             let client = Client::new();
             let url = format!("https://api.nexusmods.com/v1/games/subnautica2/mods/{}.json", mod_id);
             if let Ok(resp) = client.get(&url)
                 .header(auth_header.as_str(), auth_value.as_str())
                 .header("Application-Name", "Tidekeeper")
-                .header("Application-Version", "0.5.1")
+                .header("Application-Version", &app_version)
                 .send().await
             {
                 if let Ok(json) = resp.json::<serde_json::Value>().await {
@@ -1024,6 +1025,7 @@ async fn process_nxm(app: &AppHandle, nxm_url: String) -> Result<String, String>
     let config      = load_config(app).ok_or("No config — please complete setup first")?;
     let mods_folder = config.mods_folder.clone().ok_or("No mods folder configured")?;
     let (auth_header, auth_value) = get_nexus_auth(app).await?;
+    let app_version = app.package_info().version.to_string();
 
     let download_dir = config.download_dir
         .as_deref()
@@ -1035,12 +1037,13 @@ async fn process_nxm(app: &AppHandle, nxm_url: String) -> Result<String, String>
     let api_url = format!(
         "https://api.nexusmods.com/v1/games/{game}/mods/{mod_id}/files/{file_id}/download_link.json?key={key}&expires={expires}"
     );
-    let links: Vec<DownloadLink> = client
+    let links_resp = client
         .get(&api_url)
         .header(auth_header.as_str(), auth_value.as_str())
         .header("Application-Name", "Tidekeeper")
-        .header("Application-Version", "0.4.0")
-        .send().await.map_err(|e| e.to_string())?
+        .header("Application-Version", &app_version)
+        .send().await.map_err(|e| e.to_string())?;
+    let links: Vec<DownloadLink> = check_nexus_rate_limit(links_resp).await?
         .json().await.map_err(|e| format!("Failed to parse download links: {}", e))?;
 
     let uri = links.into_iter().next().ok_or("No download links returned")?.uri;
@@ -1132,23 +1135,27 @@ async fn process_nxm(app: &AppHandle, nxm_url: String) -> Result<String, String>
         if let Ok(resp) = client.get(&mod_url)
             .header(auth_header.as_str(), auth_value.as_str())
             .header("Application-Name", "Tidekeeper")
-            .header("Application-Version", "0.5.1")
+            .header("Application-Version", &app_version)
             .send().await
         {
-            if let Ok(j) = resp.json::<serde_json::Value>().await {
-                display_name = j.get("name").and_then(|v| v.as_str()).map(str::to_string);
+            if resp.status().is_success() {
+                if let Ok(j) = resp.json::<serde_json::Value>().await {
+                    display_name = j.get("name").and_then(|v| v.as_str()).map(str::to_string);
+                }
             }
         }
 
         if let Ok(resp) = client.get(&file_url)
             .header(auth_header.as_str(), auth_value.as_str())
             .header("Application-Name", "Tidekeeper")
-            .header("Application-Version", "0.5.1")
+            .header("Application-Version", &app_version)
             .send().await
         {
-            if let Ok(j) = resp.json::<serde_json::Value>().await {
-                file_variant_name = j.get("name").and_then(|v| v.as_str()).map(str::to_string);
-                file_version      = j.get("version").and_then(|v| v.as_str()).map(str::to_string);
+            if resp.status().is_success() {
+                if let Ok(j) = resp.json::<serde_json::Value>().await {
+                    file_variant_name = j.get("name").and_then(|v| v.as_str()).map(str::to_string);
+                    file_version      = j.get("version").and_then(|v| v.as_str()).map(str::to_string);
+                }
             }
         }
     }
@@ -1220,12 +1227,13 @@ async fn validate_nexus_key(app: AppHandle) -> Result<NexusUserInfo, String> {
     let current = app.package_info().version.to_string();
     let (auth_header, auth_value) = get_nexus_auth(&app).await?;
     let client = Client::new();
-    let resp: serde_json::Value = client
+    let raw = client
         .get("https://api.nexusmods.com/v1/users/validate.json")
         .header(auth_header.as_str(), auth_value.as_str())
         .header("Application-Name", "Tidekeeper")
         .header("Application-Version", &current)
-        .send().await.map_err(|e| e.to_string())?
+        .send().await.map_err(|e| e.to_string())?;
+    let resp: serde_json::Value = check_nexus_rate_limit(raw).await?
         .json().await.map_err(|e| e.to_string())?;
     Ok(NexusUserInfo {
         is_premium: resp["is_premium"].as_bool().unwrap_or(false),
@@ -1278,15 +1286,17 @@ pub struct ModUpdateStatus {
 
 #[tauri::command]
 async fn get_nexus_mod_files(app: AppHandle, mod_id: u64) -> Result<Vec<NexusFileEntry>, String> {
+    let app_version = app.package_info().version.to_string();
     let (auth_header, auth_value) = get_nexus_auth(&app).await?;
     let client = Client::new();
     let url = format!("https://api.nexusmods.com/v1/games/subnautica2/mods/{}/files.json", mod_id);
-    let resp: NexusFilesResponse = client
+    let raw = client
         .get(&url)
         .header(auth_header.as_str(), auth_value.as_str())
         .header("Application-Name", "Tidekeeper")
-        .header("Application-Version", "0.4.0")
-        .send().await.map_err(|e| e.to_string())?
+        .header("Application-Version", &app_version)
+        .send().await.map_err(|e| e.to_string())?;
+    let resp: NexusFilesResponse = check_nexus_rate_limit(raw).await?
         .json().await.map_err(|e| format!("Failed to parse files: {}", e))?;
     // Only show MAIN (1) and OPTIONAL (3) — exclude old versions and deleted
     let entries = resp.files.into_iter()
@@ -1303,6 +1313,7 @@ async fn get_nexus_mod_files(app: AppHandle, mod_id: u64) -> Result<Vec<NexusFil
 
 #[tauri::command]
 async fn install_nexus_mod(app: AppHandle, mod_id: u64, file_id: u64, version: Option<String>, file_name: Option<String>) -> Result<String, String> {
+    let app_version = app.package_info().version.to_string();
     let config = load_config(&app).ok_or("No config")?;
     let mods_folder = config.mods_folder.ok_or("No mods folder configured")?;
     let (auth_header, auth_value) = get_nexus_auth(&app).await?;
@@ -1321,9 +1332,13 @@ async fn install_nexus_mod(app: AppHandle, mod_id: u64, file_id: u64, version: O
         .get(&links_url)
         .header(auth_header.as_str(), auth_value.as_str())
         .header("Application-Name", "Tidekeeper")
-        .header("Application-Version", "0.4.0")
+        .header("Application-Version", &app_version)
         .send().await.map_err(|e| e.to_string())?;
-    if !links_resp.status().is_success() {
+    let status = links_resp.status();
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return Err(check_nexus_rate_limit(links_resp).await.unwrap_err());
+    }
+    if !status.is_success() {
         let body: serde_json::Value = links_resp.json().await.unwrap_or_default();
         let msg = body["message"].as_str().unwrap_or("unknown error");
         return Err(format!(
@@ -1434,6 +1449,7 @@ async fn check_mod_updates(app: AppHandle) -> Vec<ModUpdateStatus> {
         Ok(a)  => a,
         Err(_) => return vec![],
     };
+    let app_version = app.package_info().version.to_string();
 
     let mut nexus_mods: Vec<(String, PathBuf, ModMeta)> = Vec::new();
 
@@ -1483,8 +1499,9 @@ async fn check_mod_updates(app: AppHandle) -> Vec<ModUpdateStatus> {
             let r = client.get(&url)
                 .header(auth_header.as_str(), auth_value.as_str())
                 .header("Application-Name", "Tidekeeper")
-                .header("Application-Version", "0.4.0")
+                .header("Application-Version", app_version.as_str())
                 .send().await.ok()?;
+            if !r.status().is_success() { return None; }
             r.json::<NexusModInfo>().await.ok()?.version
         }.await;
 
@@ -1500,8 +1517,9 @@ async fn check_mod_updates(app: AppHandle) -> Vec<ModUpdateStatus> {
                 let r = client.get(&files_url)
                     .header(auth_header.as_str(), auth_value.as_str())
                     .header("Application-Name", "Tidekeeper")
-                    .header("Application-Version", "0.5.4")
+                    .header("Application-Version", app_version.as_str())
                     .send().await.ok()?;
+                if !r.status().is_success() { return None; }
                 r.json::<NexusFilesResponse>().await.ok().map(|r| r.files)
             }.await;
             if let Some(files) = files {
@@ -2195,6 +2213,7 @@ fn get_ue4ss_log(app: AppHandle) -> Result<String, String> {
 const OAUTH_REDIRECT_URI: &str = "http://127.0.0.1:8089/callback";
 const OAUTH_AUTH_URL: &str     = "https://users.nexusmods.com/oauth/authorize";
 const OAUTH_TOKEN_URL: &str    = "https://users.nexusmods.com/oauth/token";
+const NEXUS_CLIENT_ID: &str    = "public_test"; // Replace with registered client_id once approved by Nexus
 
 fn generate_code_verifier() -> String {
     use rand::RngCore;
@@ -2267,17 +2286,17 @@ async fn do_token_refresh(refresh: &str, client_id: &str) -> Result<TokenRespons
 async fn get_nexus_auth(app: &AppHandle) -> Result<(String, String), String> {
     let config = load_config(app).ok_or("No config")?;
 
-    if let (Some(token), Some(exp), Some(refresh), Some(client_id)) = (
+    if let (Some(token), Some(exp), Some(refresh)) = (
         config.nexus_token.clone(),
         config.nexus_token_expiry,
         config.nexus_refresh_token.clone(),
-        config.nexus_client_id.clone(),
     ) {
         if now_secs() < exp.saturating_sub(60) {
             return Ok(("Authorization".into(), format!("Bearer {}", token)));
         }
         // Expired — try refresh
-        if let Ok(new_tokens) = do_token_refresh(&refresh, &client_id).await {
+        let client_id = config.nexus_client_id.as_deref().unwrap_or(NEXUS_CLIENT_ID);
+        if let Ok(new_tokens) = do_token_refresh(&refresh, client_id).await {
             if let Ok(payload) = decode_jwt_payload(&new_tokens.access_token) {
                 let new_exp = payload["exp"].as_u64().unwrap_or(0);
                 if let Some(mut cfg) = load_config(app) {
@@ -2301,6 +2320,23 @@ async fn get_nexus_auth(app: &AppHandle) -> Result<(String, String), String> {
     config.nexus_api_key
         .map(|k| ("apikey".into(), k))
         .ok_or_else(|| "No Nexus authentication. Sign in with Nexus Mods or add an API key in Settings.".into())
+}
+
+async fn check_nexus_rate_limit(resp: reqwest::Response) -> Result<reqwest::Response, String> {
+    if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        let daily_remaining = resp.headers()
+            .get("X-RL-Daily-Remaining")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<i64>().ok());
+        if daily_remaining == Some(0) {
+            return Err("Nexus Mods daily API quota exceeded. Try again tomorrow.".into());
+        }
+        return Err("Nexus Mods rate limit reached. Please wait a moment and try again.".into());
+    }
+    if !resp.status().is_success() {
+        return Err(format!("Nexus API error: HTTP {}", resp.status()));
+    }
+    Ok(resp)
 }
 
 async fn handle_oauth_callback(
@@ -2410,7 +2446,7 @@ fn nexus_get_auth_status(app: AppHandle) -> AuthStatus {
 #[tauri::command]
 async fn nexus_oauth_login(app: AppHandle) -> Result<String, String> {
     let config    = load_config(&app).ok_or("No config")?;
-    let client_id = config.nexus_client_id.unwrap_or_else(|| "public_test".into());
+    let client_id = config.nexus_client_id.unwrap_or_else(|| NEXUS_CLIENT_ID.to_string());
 
     let verifier  = generate_code_verifier();
     let challenge = generate_code_challenge(&verifier);
@@ -2455,14 +2491,15 @@ async fn nexus_graphql(app: AppHandle, query: String) -> Result<serde_json::Valu
     let current = app.package_info().version.to_string();
     let (auth_header, auth_value) = get_nexus_auth(&app).await?;
     let client = Client::new();
-    let resp: serde_json::Value = client
+    let raw = client
         .post("https://api.nexusmods.com/v2/graphql")
         .header(auth_header.as_str(), auth_value.as_str())
         .header("Content-Type", "application/json")
         .header("Application-Name", "Tidekeeper")
         .header("Application-Version", &current)
         .json(&serde_json::json!({ "query": query }))
-        .send().await.map_err(|e| e.to_string())?
+        .send().await.map_err(|e| e.to_string())?;
+    let resp: serde_json::Value = check_nexus_rate_limit(raw).await?
         .json().await.map_err(|e| e.to_string())?;
     Ok(resp)
 }
@@ -2482,12 +2519,13 @@ async fn try_check_update(app: &AppHandle) -> Result<UpdateInfo, String> {
     let current = app.package_info().version.to_string();
     let (auth_header, auth_value) = get_nexus_auth(app).await?;
     let client = Client::new();
-    let resp: NexusFilesResponse = client
+    let raw = client
         .get("https://api.nexusmods.com/v1/games/subnautica2/mods/343/files.json")
         .header(auth_header.as_str(), auth_value.as_str())
         .header("Application-Name", "Tidekeeper")
         .header("Application-Version", &current)
-        .send().await.map_err(|e| e.to_string())?
+        .send().await.map_err(|e| e.to_string())?;
+    let resp: NexusFilesResponse = check_nexus_rate_limit(raw).await?
         .json().await.map_err(|e| e.to_string())?;
     let latest = resp.files.into_iter()
         .filter(|f| f.category_id == Some(1))
@@ -2524,12 +2562,13 @@ async fn install_update(app: AppHandle, file_id: u64) -> Result<(), String> {
         "https://api.nexusmods.com/v1/games/subnautica2/mods/343/files/{}/download_link.json",
         file_id
     );
-    let links: Vec<DownloadLink> = client
+    let raw = client
         .get(&links_url)
         .header(auth_header.as_str(), auth_value.as_str())
         .header("Application-Name", "Tidekeeper")
         .header("Application-Version", &current)
-        .send().await.map_err(|e| e.to_string())?
+        .send().await.map_err(|e| e.to_string())?;
+    let links: Vec<DownloadLink> = check_nexus_rate_limit(raw).await?
         .json().await.map_err(|e| format!("Failed to get download link: {}", e))?;
     let uri = links.into_iter().next().ok_or("No download link returned")?.uri;
 
