@@ -1,6 +1,6 @@
 {
   "name": "tidekeeper",
-  "version": "1.0.0",
+  "version": "0.5.29",
   "type": "module",
   "scripts": {
     "dev": "vite",
