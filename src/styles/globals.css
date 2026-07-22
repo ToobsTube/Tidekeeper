@@ -343,7 +343,8 @@ html, body, #root {
   flex-shrink: 0;
   transition: background 0.2s;
 }
-.status-dot.online { background: var(--success); box-shadow: 0 0 5px rgba(0,212,160,0.5); }
+.status-dot.online,
+.status-dot.signed-in { background: var(--success); box-shadow: 0 0 5px rgba(0,212,160,0.5); }
 
 .nexus-label {
   font-size: 11px;

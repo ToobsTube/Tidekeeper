@@ -39,7 +39,8 @@ async function launchGame() {
   }
 }
 
-export default function Sidebar({ activeTab, onTabChange, hasUpdate }) {
+export default function Sidebar({ activeTab, onTabChange, hasUpdate, nexusUsername }) {
+  const signedIn = !!nexusUsername;
   return (
     <aside className="sidebar">
       <div className="sidebar-brand">
@@ -69,20 +70,21 @@ export default function Sidebar({ activeTab, onTabChange, hasUpdate }) {
           Launch Subnautica 2
         </button>
         <div className="nexus-status">
-          <div className="status-dot" />
-          <span className="nexus-label">Nexus: Not signed in</span>
+          <div className={`status-dot${signedIn ? ' signed-in' : ''}`} />
+          <span className="nexus-label">
+            {signedIn ? `Nexus: ${nexusUsername}` : 'Nexus: Not signed in'}
+          </span>
         </div>
-        <button
-          className="btn-nexus"
-          onClick={() => onTabChange('settings')}
-        >
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/>
-            <polyline points="10 17 15 12 10 7"/>
-            <line x1="15" y1="12" x2="3" y2="12"/>
-          </svg>
-          Sign in with Nexus
-        </button>
+        {!signedIn && (
+          <button className="btn-nexus" onClick={() => onTabChange('settings')}>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/>
+              <polyline points="10 17 15 12 10 7"/>
+              <line x1="15" y1="12" x2="3" y2="12"/>
+            </svg>
+            Sign in with Nexus
+          </button>
+        )}
       </div>
     </aside>
   );

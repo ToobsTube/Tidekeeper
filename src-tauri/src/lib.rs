@@ -1312,7 +1312,7 @@ async fn get_nexus_mod_files(app: AppHandle, mod_id: u64) -> Result<Vec<NexusFil
 }
 
 #[tauri::command]
-async fn install_nexus_mod(app: AppHandle, mod_id: u64, file_id: u64, version: Option<String>, file_name: Option<String>) -> Result<String, String> {
+async fn install_nexus_mod(app: AppHandle, mod_id: u64, file_id: u64, version: Option<String>, file_name: Option<String>, existing_mod_path: Option<String>) -> Result<String, String> {
     let app_version = app.package_info().version.to_string();
     let config = load_config(&app).ok_or("No config")?;
     let mods_folder = config.mods_folder.ok_or("No mods folder configured")?;
@@ -1366,11 +1366,26 @@ async fn install_nexus_mod(app: AppHandle, mod_id: u64, file_id: u64, version: O
         .unwrap_or_else(|| "mod".into());
     let zip_bytes = archive_to_zip_bytes(&saved_path.to_string_lossy())?;
     let info = analyze_zip(&zip_bytes, &zip_stem)?;
-    let folder_name = file_name.as_deref().unwrap_or(&info.suggested_name);
 
-    // Backup existing install if this is an update
-    let expected_mod_path = mod_install_path(&info.install_type, &mods_folder, folder_name);
-    let is_update = expected_mod_path.as_ref().map(|p| p.exists()).unwrap_or(false);
+    // When called from the Updates tab, existing_mod_path tells us exactly which
+    // folder to replace — use its name so a renamed file doesn't create a duplicate.
+    let existing_path = existing_mod_path.as_deref().map(PathBuf::from);
+    let existing_folder_name = existing_path.as_ref()
+        .and_then(|p| p.file_name())
+        .map(|n| n.to_string_lossy().into_owned());
+    let folder_name = existing_folder_name.as_deref()
+        .or(file_name.as_deref())
+        .unwrap_or(&info.suggested_name);
+
+    // Determine update target: prefer the explicitly provided path, otherwise derive from folder name.
+    let (expected_mod_path, is_update) = if let Some(ep) = existing_path {
+        let exists = ep.exists();
+        (Some(ep), exists)
+    } else {
+        let path = mod_install_path(&info.install_type, &mods_folder, folder_name);
+        let exists = path.as_ref().map(|p| p.exists()).unwrap_or(false);
+        (path, exists)
+    };
     let mut backup_path_str: Option<String> = None;
     let mut old_config_rel: Vec<String> = vec![];
 

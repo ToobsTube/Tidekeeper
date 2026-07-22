@@ -20,6 +20,7 @@ export default function UpdatesView({ config, onTabChange }) {
         fileId: s.latestFileId,
         version: s.latestVersion,
         fileName: s.latestFileName,
+        existingModPath: s.modPath,
       });
       // Refresh update list after install
       const results = await invoke('check_mod_updates');

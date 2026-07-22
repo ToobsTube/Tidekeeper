@@ -191,7 +191,7 @@ export default function App() {
           <SetupView onComplete={cfg => { setConfig(cfg); setTab('library'); }} />
         ) : (
           <>
-            <Sidebar activeTab={tab} onTabChange={setTab} hasUpdate={updateInfo?.available ?? false} />
+            <Sidebar activeTab={tab} onTabChange={setTab} hasUpdate={updateInfo?.available ?? false} nexusUsername={config?.nexusUsername} />
             <main className="content-area">
               {tab === 'discover'  && <DiscoverView config={config} onTabChange={setTab} isPremium={isPremium} />}
               {tab === 'library'   && <LibraryView config={config} onConfigChange={setConfig} />}
