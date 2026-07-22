@@ -28,6 +28,7 @@ export default function SettingsView({ config, onConfigChange, updateInfo, onRec
       setAuthStatus({ signedIn: true, username: e.payload.username, isPremium: e.payload.isPremium });
       setSigningIn(false);
       setOauthError(null);
+      invoke('get_config').then(cfg => { if (cfg) onConfigChange(cfg); }).catch(() => {});
     }).then(fn => { unlisten1 = fn; });
     listen('nexus-oauth-error', e => {
       setOauthError(typeof e.payload === 'string' ? e.payload : 'Sign-in failed — please try again.');

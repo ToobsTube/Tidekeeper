@@ -1,6 +1,6 @@
 [package]
 name = "tidekeeper"
-version = "0.5.31"
+version = "0.5.32"
 description = "UE4SS Mod Manager for Subnautica 2"
 authors = ["ToobsTube"]
 edition = "2021"
