@@ -2213,7 +2213,7 @@ fn get_ue4ss_log(app: AppHandle) -> Result<String, String> {
 const OAUTH_REDIRECT_URI: &str = "http://127.0.0.1:8089/callback";
 const OAUTH_AUTH_URL: &str     = "https://users.nexusmods.com/oauth/authorize";
 const OAUTH_TOKEN_URL: &str    = "https://users.nexusmods.com/oauth/token";
-const NEXUS_CLIENT_ID: &str    = "public_test"; // Replace with registered client_id once approved by Nexus
+const NEXUS_CLIENT_ID: &str = "tidekeeper";
 
 fn generate_code_verifier() -> String {
     use rand::RngCore;
