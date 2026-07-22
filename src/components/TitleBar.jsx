@@ -1,10 +1,14 @@
 import { useState, useEffect, useRef } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { getVersion } from '@tauri-apps/api/app';
 
 export default function TitleBar({ environments = [], activeEnvId, onSwitch, onAddEnvironment, onRemoveEnvironment }) {
   const [maximized, setMaximized] = useState(false);
   const [open, setOpen] = useState(false);
+  const [version, setVersion] = useState('');
   const dropdownRef = useRef(null);
+
+  useEffect(() => { getVersion().then(setVersion); }, []);
 
   useEffect(() => {
     const win = getCurrentWindow();
@@ -57,6 +61,7 @@ export default function TitleBar({ environments = [], activeEnvId, onSwitch, onA
             )}
           </div>
         )}
+        {version && <span className="titlebar-version">v{version}</span>}
       </div>
       <div className="titlebar-controls">
         <button className="titlebar-btn" onClick={() => win.minimize()} title="Minimize">

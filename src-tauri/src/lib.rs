@@ -2348,34 +2348,42 @@ async fn handle_oauth_callback(
 ) {
     let cb = tauri::async_runtime::spawn_blocking(move || {
         use std::io::{BufRead, BufReader, Write};
-        let (mut stream, _) = listener.accept().map_err(|e| e.to_string())?;
-        let mut reader = BufReader::new(&stream);
-        let mut line = String::new();
-        reader.read_line(&mut line).map_err(|e| e.to_string())?;
 
-        // "GET /callback?code=...&state=... HTTP/1.1"
-        let query = line.split_whitespace().nth(1)
-            .and_then(|p| p.split_once('?')).map(|(_, q)| q).unwrap_or("");
+        // Browsers often fire favicon/prefetch requests before the real OAuth redirect.
+        // Loop until a connection arrives that actually carries code + state.
+        for _ in 0..20 {
+            let (mut stream, _) = listener.accept().map_err(|e| e.to_string())?;
+            let mut reader = BufReader::new(&stream);
+            let mut line   = String::new();
+            reader.read_line(&mut line).map_err(|e| e.to_string())?;
 
-        let mut code  = None;
-        let mut state = None;
-        for param in query.split('&') {
-            if let Some(v) = param.strip_prefix("code=")  { code  = Some(v.to_string()); }
-            if let Some(v) = param.strip_prefix("state=") { state = Some(v.to_string()); }
+            // "GET /callback?code=...&state=... HTTP/1.1"
+            let query = line.split_whitespace().nth(1)
+                .and_then(|p| p.split_once('?')).map(|(_, q)| q).unwrap_or("");
+
+            let mut code  = None;
+            let mut state = None;
+            for param in query.split('&') {
+                if let Some(v) = param.strip_prefix("code=")  { code  = Some(v.to_string()); }
+                if let Some(v) = param.strip_prefix("state=") { state = Some(v.to_string()); }
+            }
+
+            if let (Some(c), Some(s)) = (code, state) {
+                let html = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n\
+                    <html><head><title>Tidekeeper</title></head>\
+                    <body style='font-family:sans-serif;text-align:center;padding:60px;background:#0d1117;color:#e0e0e0'>\
+                    <h2 style='color:#00d4ff'>\u{2713} Signed in! You can close this tab.</h2>\
+                    <p>Return to Tidekeeper to continue.</p>\
+                    </body></html>";
+                let _ = stream.write_all(html.as_bytes());
+                return Ok((c, s));
+            }
+
+            // Not the callback request (favicon, prefetch, etc.) — respond minimally and keep waiting.
+            let _ = stream.write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n");
         }
 
-        let html = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n\
-            <html><head><title>Tidekeeper</title></head>\
-            <body style='font-family:sans-serif;text-align:center;padding:60px;background:#0d1117;color:#e0e0e0'>\
-            <h2 style='color:#00d4ff'>\u{2713} Signed in! You can close this tab.</h2>\
-            <p>Return to Tidekeeper to continue.</p>\
-            </body></html>";
-        let _ = stream.write_all(html.as_bytes());
-
-        match (code, state) {
-            (Some(c), Some(s)) => Ok((c, s)),
-            _ => Err("OAuth callback missing code or state".to_string()),
-        }
+        Err("OAuth callback missing code or state".to_string())
     }).await;
 
     let (code, state) = match cb {
