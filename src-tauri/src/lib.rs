@@ -1339,13 +1339,13 @@ async fn install_nexus_mod(app: AppHandle, mod_id: u64, file_id: u64, version: O
         return Err(check_nexus_rate_limit(links_resp).await.unwrap_err());
     }
     if !status.is_success() {
-        let body: serde_json::Value = links_resp.json().await.unwrap_or_default();
-        let msg = body["message"].as_str().unwrap_or("unknown error");
-        return Err(format!(
-            "Nexus requires a Premium account for direct installs ({}). \
-             Use the \"Mod Manager Download\" button on the Nexus website instead.",
-            msg
-        ));
+        let mod_url = format!("https://www.nexusmods.com/subnautica2/mods/{}", mod_id);
+        let _ = tauri_plugin_opener::OpenerExt::opener(&app).open_url(&mod_url, None::<&str>);
+        return Err(
+            "Nexus Premium is required for in-app downloads. \
+             Opening the mod page in your browser — use the Mod Manager Download button there."
+            .into()
+        );
     }
     let links: Vec<DownloadLink> = links_resp.json().await
         .map_err(|e| format!("Failed to parse download links: {}", e))?;
